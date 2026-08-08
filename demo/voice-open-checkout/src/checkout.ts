@@ -4,7 +4,8 @@ export interface CheckoutRequest {
 }
 
 export function calculateFinalPrice(request: CheckoutRequest): number {
-	return request.subtotalCents - (request.subtotalCents * request.discountPercent / 100);
+	const finalPrice = request.subtotalCents - (request.subtotalCents * request.discountPercent / 100);
+	return Math.max(0, finalPrice);
 }
 
 export function checkout(request: CheckoutRequest): { totalCents: number } {
