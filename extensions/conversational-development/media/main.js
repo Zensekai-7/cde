@@ -21,6 +21,9 @@
 	const walkthroughRepeatButton = document.getElementById('walkthroughRepeat');
 	const walkthroughNextButton = document.getElementById('walkthroughNext');
 	const walkthroughStopButton = document.getElementById('walkthroughStop');
+	const backgroundJobsSection = document.getElementById('backgroundJobs');
+	const backgroundJobCount = document.getElementById('backgroundJobCount');
+	const backgroundJobList = document.getElementById('backgroundJobList');
 
 	let peerConnection;
 	let dataChannel;
@@ -43,6 +46,7 @@
 	const pendingTools = new Map();
 	const queuedResponses = [];
 	const codeGenerationStreams = new Map();
+	const backgroundJobs = new Map();
 
 	function nextId(prefix) {
 		sequence += 1;
@@ -101,6 +105,55 @@
 		}
 		setReadyState();
 		log(muted ? 'microphone.muted' : 'microphone.unmuted');
+	}
+
+	function renderBackgroundJobs() {
+		const jobs = [...backgroundJobs.values()].sort((left, right) => right.created_at - left.created_at);
+		backgroundJobsSection.hidden = jobs.length === 0;
+		if (jobs.length === 0) {
+			backgroundJobList.replaceChildren();
+			backgroundJobCount.textContent = '';
+			return;
+		}
+
+		const active = jobs.filter(job => job.status === 'queued' || job.status === 'preparing' || job.status === 'running').length;
+		const ready = jobs.filter(job => job.status === 'completed').length;
+		backgroundJobCount.textContent = [active ? `${active} active` : '', ready ? `${ready} ready` : ''].filter(Boolean).join(' · ') || `${jobs.length} retained`;
+		const items = jobs.map(job => {
+			const item = document.createElement('li');
+			item.className = 'background-job';
+
+			const header = document.createElement('div');
+			header.className = 'background-job-header';
+			const label = document.createElement('strong');
+			label.textContent = job.label;
+			label.title = job.request;
+			const status = document.createElement('span');
+			status.className = `background-job-status ${job.status}`;
+			status.textContent = job.status;
+			header.append(label, status);
+
+			const progress = document.createElement('p');
+			progress.className = 'background-job-progress';
+			progress.textContent = job.progress || job.request;
+			item.append(header, progress);
+			if (Array.isArray(job.changed_files) && job.changed_files.length > 0) {
+				const files = document.createElement('small');
+				files.className = 'background-job-files';
+				files.textContent = job.changed_files.join(', ');
+				item.append(files);
+			}
+			return item;
+		});
+		backgroundJobList.replaceChildren(...items);
+	}
+
+	function updateBackgroundJob(job) {
+		if (!job?.id) {
+			return;
+		}
+		backgroundJobs.set(job.id, job);
+		renderBackgroundJobs();
 	}
 
 	function sendEvent(event) {
@@ -735,12 +788,13 @@
 		const requestId = nextId('tool');
 		const isCodeQuestion = name === 'ask_codebase';
 		const isCodeGeneration = name === 'implement_change';
+		const isBackgroundJob = name === 'start_background_change' || name === 'control_background_job';
 		const isTerminal = name === 'run_terminal_command' || name === 'control_terminal';
 		if (isCodeGeneration) {
 			codeGenerationStreams.set(callId, { activity: 'Starting the code-writing agent…', text: '', patches: new Map() });
 		}
-		setState('acting', isCodeQuestion ? 'Inspecting the codebase…' : isCodeGeneration ? 'Implementing…' : isTerminal ? 'Using the terminal…' : 'Using the IDE…');
-		assistantText.textContent = isCodeQuestion ? 'Reading the relevant code…' : isCodeGeneration ? 'Making the requested change…' : isTerminal ? 'Working in a managed terminal…' : 'Working in the editor…';
+		setState('acting', isCodeQuestion ? 'Inspecting the codebase…' : isCodeGeneration ? 'Implementing…' : isBackgroundJob ? 'Managing background work…' : isTerminal ? 'Using the terminal…' : 'Using the IDE…');
+		assistantText.textContent = isCodeQuestion ? 'Reading the relevant code…' : isCodeGeneration ? 'Making the requested change…' : isBackgroundJob ? 'Working with the background agents…' : isTerminal ? 'Working in a managed terminal…' : 'Working in the editor…';
 		log('tool.dispatch', `${name} ${args || '{}'}`);
 		vscode.postMessage({
 			type: 'executeTool',
@@ -894,6 +948,18 @@
 			case 'walkthroughStepReady':
 				handleWalkthroughStepReady(message);
 				break;
+			case 'backgroundJobsSnapshot':
+				backgroundJobs.clear();
+				for (const job of message.jobs || []) {
+					if (job?.id) {
+						backgroundJobs.set(job.id, job);
+					}
+				}
+				renderBackgroundJobs();
+				break;
+			case 'backgroundJobUpdated':
+				updateBackgroundJob(message.job);
+				break;
 		}
 	});
 
@@ -931,4 +997,5 @@
 			log('text.error', error.message);
 		}
 	});
+	vscode.postMessage({ type: 'requestBackgroundJobs' });
 }());

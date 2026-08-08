@@ -23,6 +23,7 @@
     "compile": "gulp compile-extension:conversational-development",
     "watch": "gulp watch-extension:conversational-development",
 		"test:navigation": "node --test ./out/test/navigationRanking.test.js",
+		"test:background-jobs": "node --test ./out/test/backgroundJobsProtocol.test.js",
 		"test:conversation-context": "node --test ./out/test/conversationContext.test.js",
 		"test:code-qa": "node --test ./out/test/codeQaProtocol.test.js",
 		"test:query-cache": "node --test ./out/test/queryCache.test.js",

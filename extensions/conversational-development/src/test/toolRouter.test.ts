@@ -10,8 +10,13 @@ import { parseHaikuToolRoute } from '../toolRoutingProtocol';
 
 test('uses end-state semantics for workspace changes rather than navigation', () => {
 	assert.match(ROUTING_INSTRUCTIONS, /semantic end state that would make the request complete/);
-	assert.match(ROUTING_INSTRUCTIONS, /end state differs from the current workspace, choose implement_change/);
+	assert.match(ROUTING_INSTRUCTIONS, /end state differs from the current workspace, choose implement_change by default/);
 	assert.match(ROUTING_INSTRUCTIONS, /Never choose navigation merely to locate or inspect a target before changing it/);
+});
+
+test('reserves background jobs for explicit parallel work and explicit application', () => {
+	assert.match(ROUTING_INSTRUCTIONS, /start_background_change instead only when the user explicitly asks/);
+	assert.match(ROUTING_INSTRUCTIONS, /Never apply a background result automatically/);
 });
 
 test('parses a strict Haiku IDE tool call', () => {
@@ -137,6 +142,36 @@ test('parses managed terminal tool calls', () => {
 		dispatch: {
 			name: 'control_terminal',
 			arguments: '{"action":"send_input","session":"server","input":"rs","submit":false}',
+		},
+	});
+});
+
+test('parses background coding job tool calls', () => {
+	assert.deepStrictEqual(parseHaikuToolRoute({
+		content: [{
+			type: 'tool_use',
+			name: 'start_background_change',
+			input: { request: 'Add boundary validation and tests.', label: 'boundary guard' },
+		}],
+	}), {
+		type: 'tool',
+		dispatch: {
+			name: 'start_background_change',
+			arguments: '{"request":"Add boundary validation and tests.","label":"boundary guard"}',
+		},
+	});
+
+	assert.deepStrictEqual(parseHaikuToolRoute({
+		content: [{
+			type: 'tool_use',
+			name: 'control_background_job',
+			input: { action: 'show_diff', job: 'boundary-guard', file: 'checkout.ts' },
+		}],
+	}), {
+		type: 'tool',
+		dispatch: {
+			name: 'control_background_job',
+			arguments: '{"action":"show_diff","job":"boundary-guard","file":"checkout.ts"}',
 		},
 	});
 });

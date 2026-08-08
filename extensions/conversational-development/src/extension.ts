@@ -5,6 +5,8 @@
 
 import * as vscode from 'vscode';
 import { getOpenAiApiKey } from './apiKeys';
+import { BackgroundJobManager } from './backgroundJobs';
+import { BACKGROUND_JOB_ACTIONS, BackgroundJobAction, BackgroundJobToolResult, BackgroundJobView } from './backgroundJobsProtocol';
 import { CodeGenerationController, CodeGenerationToolResult } from './codeGeneration';
 import { CodeGenerationProgress } from './codeGenerationProtocol';
 import { CodeQaController, CodeQaToolResult } from './codeQa';
@@ -39,6 +41,8 @@ interface CdeToolArguments {
 	readonly query?: string;
 	readonly question?: string;
 	readonly request?: string;
+	readonly label?: string;
+	readonly job?: string;
 	readonly command?: string;
 	readonly session?: string;
 	readonly cwd?: string;
@@ -51,6 +55,7 @@ interface CdeToolArguments {
 	readonly callHierarchyAction?: CallHierarchyControlAction;
 	readonly walkthroughAction?: WalkthroughControlAction;
 	readonly terminalAction?: TerminalControlAction;
+	readonly backgroundJobAction?: BackgroundJobAction;
 	readonly direction?: CallHierarchyDirection;
 	readonly occurrence?: number;
 	readonly submit?: boolean;
@@ -58,6 +63,7 @@ interface CdeToolArguments {
 
 type WebviewMessage =
 	| { readonly type: 'exchangeSdp'; readonly requestId: string; readonly sdp: string }
+	| { readonly type: 'requestBackgroundJobs' }
 	| { readonly type: 'routeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly transcript: string; readonly walkthroughActive: boolean }
 	| { readonly type: 'executeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly callId: string; readonly conversationTurnId: number; readonly name: string; readonly arguments: string }
 	| { readonly type: 'revealWalkthroughStep'; readonly requestId: string; readonly sessionEpoch: number; readonly walkthroughId: string; readonly stepIndex: number; readonly step: CodeQaWalkthroughStep; readonly placement?: EditorPlacement }
@@ -93,6 +99,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 		private readonly navigation: NavigationController,
 		private readonly codeQa: CodeQaController,
 		private readonly codeGeneration: CodeGenerationController,
+		private readonly backgroundJobs: BackgroundJobManager,
 		private readonly toolRouter: SemanticToolRouter,
 		private readonly conversation: ConversationContextStore,
 		private readonly walkthrough: WalkthroughController,
@@ -108,11 +115,19 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 		};
 		view.webview.html = this.getHtml(view.webview);
 		view.webview.onDidReceiveMessage(message => this.handleMessage(message as WebviewMessage));
+		void this.post({ type: 'backgroundJobsSnapshot', jobs: this.backgroundJobs.listViews() });
 		this.trace('view.ready');
+	}
+
+	reportBackgroundJob(job: BackgroundJobView): void {
+		void this.post({ type: 'backgroundJobUpdated', job });
 	}
 
 	private async handleMessage(message: WebviewMessage): Promise<void> {
 		switch (message.type) {
+			case 'requestBackgroundJobs':
+				await this.post({ type: 'backgroundJobsSnapshot', jobs: this.backgroundJobs.listViews() });
+				return;
 			case 'exchangeSdp':
 				await this.exchangeSdp(message.requestId, message.sdp);
 				return;
@@ -232,7 +247,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 
 	private async executeTool(message: Extract<WebviewMessage, { type: 'executeTool' }>): Promise<void> {
 		this.trace(`tool.call ${message.name} ${message.arguments}`);
-		let result: NavigationToolResult | CodeQaToolResult | CodeGenerationToolResult | TerminalToolResult;
+		let result: NavigationToolResult | CodeQaToolResult | CodeGenerationToolResult | BackgroundJobToolResult | TerminalToolResult;
 		const argumentsValue = isCdeToolName(message.name) ? parseCdeToolArguments(message.name, message.arguments) : undefined;
 		if (!isCdeToolName(message.name)) {
 			result = {
@@ -290,6 +305,12 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'implement_change':
 					result = await this.implementChange(argumentsValue.request!, argumentsValue.placement, progress => this.reportCodeGenerationProgress(message, progress));
+					break;
+				case 'start_background_change':
+					result = await this.backgroundJobs.start(argumentsValue.request!, argumentsValue.label, this.conversation.getContext());
+					break;
+				case 'control_background_job':
+					result = await this.backgroundJobs.control(argumentsValue.backgroundJobAction!, argumentsValue.job, argumentsValue.file);
 					break;
 				case 'run_terminal_command':
 					result = await this.interpretTerminalResult(
@@ -427,6 +448,13 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 				<button id="walkthroughStop" class="compact" type="button" title="Stop walkthrough">Stop</button>
 			</div>
 		</section>
+		<section id="backgroundJobs" class="background-jobs" aria-live="polite" hidden>
+			<div class="background-jobs-header">
+				<span class="label">Background jobs</span>
+				<span id="backgroundJobCount" class="background-job-count"></span>
+			</div>
+			<ol id="backgroundJobList" class="background-job-list"></ol>
+		</section>
 		<form id="textForm">
 			<input id="textInput" type="text" placeholder="Text fallback" autocomplete="off">
 			<button type="submit" title="Send text">Send</button>
@@ -456,6 +484,8 @@ function isCdeToolName(name: string): name is CdeToolName {
 		|| name === 'ask_codebase'
 		|| name === 'control_walkthrough'
 		|| name === 'implement_change'
+		|| name === 'start_background_change'
+		|| name === 'control_background_job'
 		|| name === 'run_terminal_command'
 		|| name === 'control_terminal';
 }
@@ -473,6 +503,8 @@ const CDE_TOOL_ARGUMENT_KEYS: Readonly<Record<CdeToolName, readonly string[]>> =
 	ask_codebase: ['question', 'placement'],
 	control_walkthrough: ['action'],
 	implement_change: ['request', 'placement'],
+	start_background_change: ['request', 'label'],
+	control_background_job: ['action', 'job', 'file'],
 	run_terminal_command: ['command', 'session', 'cwd'],
 	control_terminal: ['action', 'session', 'input', 'submit', 'occurrence'],
 };
@@ -512,7 +544,7 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 		if (toolName === 'ask_codebase' && typeof value.question !== 'string') {
 			return undefined;
 		}
-		if (toolName === 'implement_change' && typeof value.request !== 'string') {
+		if ((toolName === 'implement_change' || toolName === 'start_background_change') && typeof value.request !== 'string') {
 			return undefined;
 		}
 		if (toolName === 'run_terminal_command' && typeof value.command !== 'string') {
@@ -547,6 +579,10 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			&& (typeof value.action !== 'string' || !TERMINAL_CONTROL_ACTIONS.includes(value.action as TerminalControlAction))) {
 			return undefined;
 		}
+		if (toolName === 'control_background_job'
+			&& (typeof value.action !== 'string' || !BACKGROUND_JOB_ACTIONS.includes(value.action as BackgroundJobAction))) {
+			return undefined;
+		}
 		if (toolName === 'show_call_hierarchy'
 			&& (typeof value.direction !== 'string' || !CALL_HIERARCHY_DIRECTIONS.includes(value.direction as CallHierarchyDirection))) {
 			return undefined;
@@ -556,6 +592,8 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			query: typeof value.query === 'string' ? value.query.trim() : undefined,
 			question: typeof value.question === 'string' ? value.question.trim() : undefined,
 			request: typeof value.request === 'string' ? value.request.trim() : undefined,
+			label: typeof value.label === 'string' ? value.label.trim() : undefined,
+			job: typeof value.job === 'string' ? value.job.trim() : undefined,
 			command: typeof value.command === 'string' ? value.command.trim() : undefined,
 			session: typeof value.session === 'string' ? value.session.trim() : undefined,
 			cwd: typeof value.cwd === 'string' ? value.cwd.trim() : undefined,
@@ -568,6 +606,7 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			callHierarchyAction: toolName === 'control_call_hierarchy' && typeof value.action === 'string' ? value.action as CallHierarchyControlAction : undefined,
 			walkthroughAction: toolName === 'control_walkthrough' && typeof value.action === 'string' ? value.action as WalkthroughControlAction : undefined,
 			terminalAction: toolName === 'control_terminal' && typeof value.action === 'string' ? value.action as TerminalControlAction : undefined,
+			backgroundJobAction: toolName === 'control_background_job' && typeof value.action === 'string' ? value.action as BackgroundJobAction : undefined,
 			direction: typeof value.direction === 'string' ? value.direction as CallHierarchyDirection : undefined,
 			occurrence: typeof value.occurrence === 'number' ? value.occurrence : undefined,
 			submit: typeof value.submit === 'boolean' ? value.submit : undefined,
@@ -627,12 +666,14 @@ export function activate(context: vscode.ExtensionContext): void {
 	workspaceIndex.warm();
 	const codeQa = new CodeQaController(trace, workspaceIndex);
 	const codeGeneration = new CodeGenerationController(trace, workspaceIndex);
+	const backgroundJobs = new BackgroundJobManager(context.globalStorageUri, codeGeneration, trace);
 	const toolRouter = new SemanticToolRouter(trace);
 	const conversation = new ConversationContextStore();
 	const walkthrough = new WalkthroughController(highlight);
 	const terminal = new TerminalOrchestrator(trace);
 	const terminalInterpreter = new TerminalResultInterpreter(trace);
-	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter, conversation, walkthrough, terminal, terminalInterpreter);
+	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, backgroundJobs, toolRouter, conversation, walkthrough, terminal, terminalInterpreter);
+	const backgroundJobUpdates = backgroundJobs.onDidChange(job => provider.reportBackgroundJob(job));
 	const openConversation = async (): Promise<void> => {
 		await vscode.commands.executeCommand('workbench.view.extension.cde');
 	};
@@ -647,6 +688,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		output,
 		highlight,
 		workspaceIndex,
+		backgroundJobs,
+		backgroundJobUpdates,
 		terminal,
 		status,
 		vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
