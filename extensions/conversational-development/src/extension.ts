@@ -63,6 +63,7 @@ interface CdeToolArguments {
 
 type WebviewMessage =
 	| { readonly type: 'exchangeSdp'; readonly requestId: string; readonly sdp: string }
+	| { readonly type: 'requestBackgroundJobs' }
 	| { readonly type: 'routeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly transcript: string; readonly walkthroughActive: boolean }
 	| { readonly type: 'executeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly callId: string; readonly conversationTurnId: number; readonly name: string; readonly arguments: string }
 	| { readonly type: 'revealWalkthroughStep'; readonly requestId: string; readonly sessionEpoch: number; readonly walkthroughId: string; readonly stepIndex: number; readonly step: CodeQaWalkthroughStep; readonly placement?: EditorPlacement }
@@ -124,6 +125,9 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 
 	private async handleMessage(message: WebviewMessage): Promise<void> {
 		switch (message.type) {
+			case 'requestBackgroundJobs':
+				await this.post({ type: 'backgroundJobsSnapshot', jobs: this.backgroundJobs.listViews() });
+				return;
 			case 'exchangeSdp':
 				await this.exchangeSdp(message.requestId, message.sdp);
 				return;
@@ -443,6 +447,13 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 				<button id="walkthroughNext" class="compact" type="button" title="Next walkthrough step">Next</button>
 				<button id="walkthroughStop" class="compact" type="button" title="Stop walkthrough">Stop</button>
 			</div>
+		</section>
+		<section id="backgroundJobs" class="background-jobs" aria-live="polite" hidden>
+			<div class="background-jobs-header">
+				<span class="label">Background jobs</span>
+				<span id="backgroundJobCount" class="background-job-count"></span>
+			</div>
+			<ol id="backgroundJobList" class="background-job-list"></ol>
 		</section>
 		<form id="textForm">
 			<input id="textInput" type="text" placeholder="Text fallback" autocomplete="off">

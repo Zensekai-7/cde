@@ -294,6 +294,94 @@ button.compact:not(:disabled):hover {
 	text-overflow: ellipsis;
 }
 
+.background-jobs {
+	display: grid;
+	gap: 8px;
+	padding: 11px;
+	border: 1px solid var(--vscode-widget-border);
+	border-radius: 6px;
+	background: var(--vscode-editor-background);
+}
+
+.background-jobs[hidden] {
+	display: none;
+}
+
+.background-jobs-header,
+.background-job-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.background-job-count,
+.background-job-progress,
+.background-job-files {
+	color: var(--vscode-descriptionForeground);
+	font-size: 10px;
+}
+
+.background-job-list {
+	display: grid;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.background-job {
+	display: grid;
+	gap: 3px;
+	padding: 7px;
+	border-radius: 4px;
+	background: var(--vscode-sideBar-background);
+}
+
+.background-job-header strong,
+.background-job-files {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.background-job-header strong {
+	font-size: 11px;
+}
+
+.background-job-status {
+	flex: none;
+	padding: 1px 5px;
+	border: 1px solid var(--vscode-widget-border);
+	border-radius: 999px;
+	color: var(--vscode-descriptionForeground);
+	font-size: 9px;
+	text-transform: capitalize;
+}
+
+.background-job-status.queued,
+.background-job-status.preparing,
+.background-job-status.running {
+	border-color: var(--vscode-progressBar-background);
+	color: var(--vscode-progressBar-background);
+}
+
+.background-job-status.completed,
+.background-job-status.applied {
+	border-color: var(--vscode-testing-iconPassed);
+	color: var(--vscode-testing-iconPassed);
+}
+
+.background-job-status.failed,
+.background-job-status.cancelled {
+	border-color: var(--vscode-testing-iconFailed);
+	color: var(--vscode-testing-iconFailed);
+}
+
+.background-job-progress {
+	overflow-wrap: anywhere;
+}
+
 #textForm {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
