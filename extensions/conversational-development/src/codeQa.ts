@@ -157,7 +157,7 @@ function createQueryOptions(workspaceRoot: string, abortController: AbortControl
 			type: 'json_schema',
 			schema: CODE_QA_OUTPUT_SCHEMA,
 		},
-		systemPrompt: `You are the read-only code analyst inside a conversational development environment. Inspect the repository before answering. You may read and search, but never edit files, run shell commands, browse the web, or claim facts the repository does not establish. Return concise, demo-ready answers with precise repository-relative file:line citations.`,
+		systemPrompt: `You are the read-only code analyst inside a conversational development environment. Treat the supplied live editor source as repository evidence and use repository tools only when that evidence is insufficient. You may read and search, but never edit files, run shell commands, browse the web, or claim facts the repository does not establish. Return concise, demo-ready answers with precise repository-relative file:line citations.`,
 	};
 }
 
@@ -169,6 +169,9 @@ function captureEditorContext(workspaceRoot: vscode.Uri, question: string, conve
 	const selection = activeEditor && !activeEditor.selection.isEmpty
 		? activeEditor.document.getText(activeEditor.selection)
 		: undefined;
+	const activeFileContent = activeEditor && activeEditor.document.uri.scheme === 'file'
+		? activeEditor.document.getText()
+		: undefined;
 	const visibleFiles = vscode.window.visibleTextEditors
 		.filter(editor => editor.document.uri.scheme === 'file')
 		.map(editor => relativePath(workspaceRoot.fsPath, editor.document.uri.fsPath))
@@ -179,6 +182,7 @@ function captureEditorContext(workspaceRoot: vscode.Uri, question: string, conve
 		activeFile,
 		activeLine: activeEditor ? activeEditor.selection.active.line + 1 : undefined,
 		selection,
+		activeFileContent,
 		visibleFiles,
 		conversation,
 	};

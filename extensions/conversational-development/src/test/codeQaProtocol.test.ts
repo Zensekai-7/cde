@@ -13,6 +13,7 @@ test('buildCodeQaPrompt includes live editor context and the repository question
 		activeFile: 'src/checkout.ts',
 		activeLine: 7,
 		selection: 'return subtotal - discount;',
+		activeFileContent: 'export function calculateFinalPrice() {\n\treturn subtotal - discount;\n}',
 		visibleFiles: ['src/checkout.ts', 'src/cart.ts'],
 		conversation: {
 			recentTurns: [{
@@ -28,6 +29,9 @@ test('buildCodeQaPrompt includes live editor context and the repository question
 	assert.match(prompt, /Why can this become negative\?/);
 	assert.match(prompt, /src\/checkout\.ts:7/);
 	assert.match(prompt, /return subtotal - discount/);
+	assert.match(prompt, /1: export function calculateFinalPrice/);
+	assert.match(prompt, /3: }/);
+	assert.match(prompt, /only when evidence is missing/);
 	assert.match(prompt, /Add a discount helper/);
 	assert.match(prompt, /the change you just made/);
 	assert.match(prompt, /repository-relative path:line/);
