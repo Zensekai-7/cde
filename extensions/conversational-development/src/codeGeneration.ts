@@ -19,6 +19,8 @@ export interface CodeGenerationToolResult extends CodeGenerationAnswer {
 	readonly error?: string;
 }
 
+export type CodeGenerationEditorContext = Pick<CodeGenerationContext, 'activeFile' | 'activeLine' | 'selection' | 'visibleFiles'>;
+
 interface AgentResultSuccess {
 	readonly type: 'result';
 	readonly subtype: 'success';
@@ -79,6 +81,27 @@ export class CodeGenerationController {
 	) { }
 
 	async implement(request: string, reportProgress: (progress: CodeGenerationProgress) => void, conversation?: ConversationContext): Promise<CodeGenerationToolResult> {
+		const workspaceRoot = getWorkspaceRoot();
+		if (!workspaceRoot) {
+			return failure('Open a workspace before asking me to change code.', 'No workspace folder is open.');
+		}
+		return this.implementInWorkspace(
+			request,
+			workspaceRoot,
+			captureCodeGenerationEditorContext(workspaceRoot),
+			reportProgress,
+			conversation,
+		);
+	}
+
+	async implementInWorkspace(
+		request: string,
+		workspaceRoot: vscode.Uri,
+		editorContext: CodeGenerationEditorContext,
+		reportProgress: (progress: CodeGenerationProgress) => void,
+		conversation?: ConversationContext,
+		externalAbortController?: AbortController,
+	): Promise<CodeGenerationToolResult> {
 		const apiKey = getAnthropicApiKey();
 		if (!apiKey) {
 			return failure('Claude is not configured in this CDE launch.', 'Set cde.anthropicApiKey or ANTHROPIC_API_KEY.');
@@ -87,21 +110,20 @@ export class CodeGenerationController {
 			return failure('Trust this workspace before I make a code change.', 'Workspace trust is required for code generation.');
 		}
 
-		const workspaceRoot = getWorkspaceRoot();
-		if (!workspaceRoot) {
-			return failure('Open a workspace before asking me to change code.', 'No workspace folder is open.');
-		}
-
-		const editorContext = captureEditorContext(workspaceRoot, request, conversation);
+		const preparedContext: CodeGenerationContext = { request, ...editorContext, conversation };
 		let indexedChunks: CodeGenerationContext['indexedChunks'];
 		try {
-			indexedChunks = (await this.workspaceIndex.query(request, relatedFiles(editorContext))).chunks;
+			indexedChunks = (await this.workspaceIndex.query(request, relatedFiles(preparedContext))).chunks;
 		} catch (error) {
 			this.trace(`code-generation.index.error ${error instanceof Error ? error.message : String(error)}`);
 		}
-		const context: CodeGenerationContext = { ...editorContext, indexedChunks };
-		const abortController = new AbortController();
-		const timeout = setTimeout(() => abortController.abort(), CODE_GENERATION_TIMEOUT_MS);
+		const context: CodeGenerationContext = { ...preparedContext, indexedChunks };
+		const abortController = externalAbortController ?? new AbortController();
+		let timedOut = false;
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			abortController.abort();
+		}, CODE_GENERATION_TIMEOUT_MS);
 		this.trace(`code-generation.start workspace=${workspaceRoot.fsPath} active=${context.activeFile ?? 'none'}`);
 		reportProgress({ kind: 'tool', text: 'Starting the code-writing agent…' });
 
@@ -147,8 +169,11 @@ export class CodeGenerationController {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.trace(`code-generation.error ${message}`);
-			if (abortController.signal.aborted) {
+			if (timedOut) {
 				return failure('That code change took too long, so I stopped it.', 'Claude code generation timed out.');
+			}
+			if (abortController.signal.aborted) {
+				return failure('That background code change was cancelled.', 'Claude code generation was cancelled.');
 			}
 			return failure('I could not make that code change just now.', message);
 		} finally {
@@ -189,7 +214,7 @@ function createQueryOptions(workspaceRoot: string, abortController: AbortControl
 	};
 }
 
-function captureEditorContext(workspaceRoot: vscode.Uri, request: string, conversation: ConversationContext | undefined): CodeGenerationContext {
+export function captureCodeGenerationEditorContext(workspaceRoot: vscode.Uri): CodeGenerationEditorContext {
 	const activeEditor = vscode.window.activeTextEditor;
 	const activeFile = activeEditor && activeEditor.document.uri.scheme === 'file'
 		? relativePath(workspaceRoot.fsPath, activeEditor.document.uri.fsPath)
@@ -203,12 +228,10 @@ function captureEditorContext(workspaceRoot: vscode.Uri, request: string, conver
 		.filter((file, index, files) => files.indexOf(file) === index);
 
 	return {
-		request,
 		activeFile,
 		activeLine: activeEditor ? activeEditor.selection.active.line + 1 : undefined,
 		selection,
 		visibleFiles,
-		conversation,
 	};
 }
 
