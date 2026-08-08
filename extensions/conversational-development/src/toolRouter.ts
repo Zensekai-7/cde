@@ -160,7 +160,7 @@ const TOOLS: readonly AnthropicTool[] = [
 	},
 	{
 		name: 'run_terminal_command',
-		description: 'Start or replace a named managed terminal command. Use for tests, builds, development servers, scripts, Git inspection, logs, and other explicit shell work. Do not use for editing source files.',
+		description: 'Start or replace a named managed terminal command. Use for tests, builds, development servers, scripts, Git inspection, commits, pushes, logs, and other explicit shell work. When pushing the current checkout to a named remote branch, use git push origin HEAD:<branch>; do not assume a same-named local branch exists. Do not use for editing source files.',
 		input_schema: objectSchema({
 			command: stringProperty('The exact shell command to execute.'),
 			session: stringProperty('A short stable name used for later follow-up controls.'),

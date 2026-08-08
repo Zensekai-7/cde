@@ -153,6 +153,7 @@ export class NavigationController {
 	private lastFile: vscode.Uri | undefined;
 	private lastSymbol: ResolvedNavigationTarget | undefined;
 	private lastReferences: readonly vscode.Location[] = [];
+	private referenceIndex = -1;
 	private callHierarchy: CallHierarchyNavigationState | undefined;
 
 	constructor(private readonly highlight: vscode.TextEditorDecorationType) { }
@@ -290,6 +291,7 @@ export class NavigationController {
 				'peek',
 			);
 			this.lastReferences = [...references];
+			this.referenceIndex = this.nearestReferenceIndex(origin.uri, origin.selectionRange.start);
 			this.callHierarchy = undefined;
 			if (origin.symbolName) {
 				this.rememberSymbol(origin);
@@ -316,10 +318,10 @@ export class NavigationController {
 
 			switch (action) {
 				case 'next':
-					await vscode.commands.executeCommand('goToNextReference');
+					await this.showReferenceIndex(this.referenceIndex + 1);
 					return this.referenceResult('Showing the next reference.');
 				case 'previous':
-					await vscode.commands.executeCommand('goToPreviousReference');
+					await this.showReferenceIndex(this.referenceIndex - 1);
 					return this.referenceResult('Showing the previous reference.');
 				case 'select_file':
 					if (!fileQuery) {
@@ -327,14 +329,30 @@ export class NavigationController {
 					}
 					return await this.selectReferenceFile(fileQuery, occurrence);
 				case 'open': {
+					const location = this.currentReferenceLocation();
+					if (!location) {
+						throw new Error('No reference is currently selected.');
+					}
 					const result = this.referenceResult('Opened the current reference.');
+					await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
 					await vscode.commands.executeCommand('closeReferenceSearch');
+					const document = await vscode.workspace.openTextDocument(location.uri);
+					const editor = await vscode.window.showTextDocument(document, {
+						preview: false,
+						preserveFocus: false,
+						selection: location.range,
+					});
+					editor.revealRange(location.range, vscode.TextEditorRevealType.InCenter);
+					this.lastFile = location.uri;
 					this.lastReferences = [];
+					this.referenceIndex = -1;
 					return result;
 				}
 				case 'close':
+					await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
 					await vscode.commands.executeCommand('closeReferenceSearch');
 					this.lastReferences = [];
+					this.referenceIndex = -1;
 					return { ok: true, spoken_response: 'Closed references.' };
 			}
 		} catch (error) {
@@ -373,6 +391,7 @@ export class NavigationController {
 				frames: [{ root, items: callItems, index: callItems.length > 0 ? 0 : -1 }],
 			};
 			this.lastReferences = [];
+			this.referenceIndex = -1;
 			if (origin.symbolName) {
 				this.rememberSymbol(origin);
 			}
@@ -508,15 +527,55 @@ export class NavigationController {
 			throw new Error(`${target.path} has ${matchingFileReferences.length} reference${matchingFileReferences.length === 1 ? '' : 's'}, not ${occurrence}.`);
 		}
 
-		for (let attempt = 0; attempt <= this.lastReferences.length; attempt++) {
-			const current = this.currentReferenceLocation();
-			if (current && sameLocation(current, targetReference)) {
-				return this.referenceResult(`Showing reference ${occurrence} in ${target.path}.`);
-			}
-			await vscode.commands.executeCommand('goToNextReference');
+		const index = this.lastReferences.findIndex(reference => sameLocation(reference, targetReference));
+		if (index < 0) {
+			throw new Error(`Could not select the requested reference in ${target.path}.`);
 		}
+		await this.showReferenceIndex(index);
+		return this.referenceResult(`Showing reference ${occurrence} in ${target.path}.`);
+	}
 
-		throw new Error(`The References view did not move to ${target.path}.`);
+	private async showReferenceIndex(index: number): Promise<void> {
+		const count = this.lastReferences.length;
+		if (count === 0) {
+			throw new Error('Open references for a symbol first.');
+		}
+		const normalizedIndex = ((index % count) + count) % count;
+		const target = this.lastReferences[normalizedIndex];
+		await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+		await vscode.commands.executeCommand('closeReferenceSearch');
+		const document = await vscode.workspace.openTextDocument(target.uri);
+		const editor = await vscode.window.showTextDocument(document, {
+			preview: false,
+			preserveFocus: false,
+			selection: target.range,
+		});
+		editor.revealRange(target.range, vscode.TextEditorRevealType.InCenter);
+		await vscode.commands.executeCommand(
+			'editor.action.peekLocations',
+			target.uri,
+			target.range.start,
+			this.lastReferences,
+			'peek',
+		);
+		this.referenceIndex = normalizedIndex;
+		this.lastFile = target.uri;
+	}
+
+	private nearestReferenceIndex(uri: vscode.Uri, position: vscode.Position): number {
+		let nearestIndex = 0;
+		let nearestDistance = Number.POSITIVE_INFINITY;
+		this.lastReferences.forEach((reference, index) => {
+			const filePenalty = reference.uri.toString() === uri.toString() ? 0 : 1_000_000_000;
+			const distance = filePenalty
+				+ Math.abs(reference.range.start.line - position.line) * 1_000
+				+ Math.abs(reference.range.start.character - position.character);
+			if (distance < nearestDistance) {
+				nearestDistance = distance;
+				nearestIndex = index;
+			}
+		});
+		return nearestIndex;
 	}
 
 	private async moveCallHierarchy(delta: -1 | 1): Promise<NavigationToolResult> {
@@ -661,6 +720,7 @@ export class NavigationController {
 
 	private clearTransientNavigation(): void {
 		this.lastReferences = [];
+		this.referenceIndex = -1;
 		this.callHierarchy = undefined;
 	}
 
@@ -678,18 +738,7 @@ export class NavigationController {
 	}
 
 	private currentReferenceLocation(): vscode.Location | undefined {
-		const editor = vscode.window.activeTextEditor;
-		if (!editor) {
-			return undefined;
-		}
-		const matchingFile = this.lastReferences.filter(reference => reference.uri.toString() === editor.document.uri.toString());
-		return matchingFile.sort((left, right) => {
-			const leftDistance = Math.abs(left.range.start.line - editor.selection.active.line) * 1_000
-				+ Math.abs(left.range.start.character - editor.selection.active.character);
-			const rightDistance = Math.abs(right.range.start.line - editor.selection.active.line) * 1_000
-				+ Math.abs(right.range.start.character - editor.selection.active.character);
-			return leftDistance - rightDistance;
-		})[0];
+		return this.referenceIndex >= 0 ? this.lastReferences[this.referenceIndex] : undefined;
 	}
 
 	private async resolveFile(query: string): Promise<WorkspaceFileCandidate> {
