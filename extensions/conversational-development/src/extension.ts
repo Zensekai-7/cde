@@ -11,7 +11,9 @@ import { CodeQaController, CodeQaToolResult } from './codeQa';
 import { HaikuToolRouter, ToolRoutingContext } from './toolRouter';
 import { CdeToolName } from './toolRoutingProtocol';
 import {
+	CALL_HIERARCHY_CONTROL_ACTIONS,
 	CALL_HIERARCHY_DIRECTIONS,
+	CallHierarchyControlAction,
 	CallHierarchyDirection,
 	EDITOR_CONTROL_ACTIONS,
 	EDITOR_PLACEMENTS,
@@ -19,6 +21,8 @@ import {
 	EditorPlacement,
 	NavigationController,
 	NavigationToolResult,
+	REFERENCE_CONTROL_ACTIONS,
+	ReferenceControlAction,
 } from './navigation';
 
 const VIEW_ID = 'cde.conversation';
@@ -32,7 +36,10 @@ interface CdeToolArguments {
 	readonly file?: string;
 	readonly placement?: EditorPlacement;
 	readonly action?: EditorControlAction;
+	readonly referenceAction?: ReferenceControlAction;
+	readonly callHierarchyAction?: CallHierarchyControlAction;
 	readonly direction?: CallHierarchyDirection;
+	readonly occurrence?: number;
 }
 
 type WebviewMessage =
@@ -204,14 +211,23 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 				case 'open_file':
 					result = await this.navigation.openFile(argumentsValue.query!, argumentsValue.placement);
 					break;
+				case 'focus_open_file':
+					result = await this.navigation.focusOpenFile(argumentsValue.query!);
+					break;
 				case 'open_symbol':
 					result = await this.navigation.openSymbol(argumentsValue.query!, argumentsValue.file, argumentsValue.placement);
 					break;
 				case 'show_references':
 					result = await this.navigation.showReferences(argumentsValue.symbol, argumentsValue.file);
 					break;
+				case 'control_references':
+					result = await this.navigation.controlReferences(argumentsValue.referenceAction!, argumentsValue.file, argumentsValue.occurrence);
+					break;
 				case 'show_call_hierarchy':
 					result = await this.navigation.showCallHierarchy(argumentsValue.direction!, argumentsValue.symbol, argumentsValue.file);
+					break;
+				case 'control_call_hierarchy':
+					result = await this.navigation.controlCallHierarchy(argumentsValue.callHierarchyAction!, argumentsValue.query, argumentsValue.file);
 					break;
 				case 'go_to_definition':
 					result = await this.navigation.goToDefinition(argumentsValue.symbol, argumentsValue.file, argumentsValue.placement);
@@ -328,9 +344,12 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 
 function isCdeToolName(name: string): name is CdeToolName {
 	return name === 'open_file'
+		|| name === 'focus_open_file'
 		|| name === 'open_symbol'
 		|| name === 'show_references'
+		|| name === 'control_references'
 		|| name === 'show_call_hierarchy'
+		|| name === 'control_call_hierarchy'
 		|| name === 'go_to_definition'
 		|| name === 'control_editor'
 		|| name === 'ask_codebase'
@@ -346,12 +365,18 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 
 		const allowedKeys = toolName === 'open_file'
 			? ['query', 'placement']
+			: toolName === 'focus_open_file'
+				? ['query']
 			: toolName === 'open_symbol'
 				? ['query', 'file', 'placement']
 				: toolName === 'show_references'
 					? ['symbol', 'file']
+					: toolName === 'control_references'
+						? ['action', 'file', 'occurrence']
 					: toolName === 'show_call_hierarchy'
 						? ['direction', 'symbol', 'file']
+						: toolName === 'control_call_hierarchy'
+							? ['action', 'query', 'file']
 						: toolName === 'go_to_definition'
 							? ['symbol', 'file', 'placement']
 							: toolName === 'control_editor'
@@ -363,12 +388,18 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			return undefined;
 		}
 
-		for (const candidate of Object.values(value)) {
+		for (const [key, candidate] of Object.entries(value)) {
+			if (key === 'occurrence') {
+				if (!Number.isInteger(candidate) || (candidate as number) < 1) {
+					return undefined;
+				}
+				continue;
+			}
 			if (typeof candidate !== 'string' || !candidate.trim()) {
 				return undefined;
 			}
 		}
-		if ((toolName === 'open_file' || toolName === 'open_symbol') && typeof value.query !== 'string') {
+		if ((toolName === 'open_file' || toolName === 'focus_open_file' || toolName === 'open_symbol') && typeof value.query !== 'string') {
 			return undefined;
 		}
 		if (toolName === 'ask_codebase' && typeof value.question !== 'string') {
@@ -384,6 +415,20 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			&& (typeof value.action !== 'string' || !EDITOR_CONTROL_ACTIONS.includes(value.action as EditorControlAction))) {
 			return undefined;
 		}
+		if (toolName === 'control_references'
+			&& (typeof value.action !== 'string' || !REFERENCE_CONTROL_ACTIONS.includes(value.action as ReferenceControlAction))) {
+			return undefined;
+		}
+		if (toolName === 'control_references' && value.action === 'select_file' && typeof value.file !== 'string') {
+			return undefined;
+		}
+		if (toolName === 'control_call_hierarchy'
+			&& (typeof value.action !== 'string' || !CALL_HIERARCHY_CONTROL_ACTIONS.includes(value.action as CallHierarchyControlAction))) {
+			return undefined;
+		}
+		if (toolName === 'control_call_hierarchy' && value.action === 'select' && typeof value.query !== 'string') {
+			return undefined;
+		}
 		if (toolName === 'show_call_hierarchy'
 			&& (typeof value.direction !== 'string' || !CALL_HIERARCHY_DIRECTIONS.includes(value.direction as CallHierarchyDirection))) {
 			return undefined;
@@ -396,8 +441,11 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			symbol: typeof value.symbol === 'string' ? value.symbol.trim() : undefined,
 			file: typeof value.file === 'string' ? value.file.trim() : undefined,
 			placement: typeof value.placement === 'string' ? value.placement as EditorPlacement : undefined,
-			action: typeof value.action === 'string' ? value.action as EditorControlAction : undefined,
+			action: toolName === 'control_editor' && typeof value.action === 'string' ? value.action as EditorControlAction : undefined,
+			referenceAction: toolName === 'control_references' && typeof value.action === 'string' ? value.action as ReferenceControlAction : undefined,
+			callHierarchyAction: toolName === 'control_call_hierarchy' && typeof value.action === 'string' ? value.action as CallHierarchyControlAction : undefined,
 			direction: typeof value.direction === 'string' ? value.direction as CallHierarchyDirection : undefined,
+			occurrence: typeof value.occurrence === 'number' ? value.occurrence : undefined,
 		};
 	} catch {
 		return undefined;

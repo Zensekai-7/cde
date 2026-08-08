@@ -5,9 +5,11 @@
 
 import { getAnthropicApiKey } from './apiKeys';
 import {
+	CALL_HIERARCHY_CONTROL_ACTIONS,
 	CALL_HIERARCHY_DIRECTIONS,
 	EDITOR_CONTROL_ACTIONS,
 	EDITOR_PLACEMENTS,
+	REFERENCE_CONTROL_ACTIONS,
 } from './navigation';
 import { parseHaikuToolRoute, ToolRoutingResult } from './toolRoutingProtocol';
 
@@ -51,6 +53,14 @@ const TOOLS: readonly AnthropicTool[] = [
 		strict: true,
 	},
 	{
+		name: 'focus_open_file',
+		description: 'Pure navigation only: focus an existing open text-editor tab by semantic filename, path, or module description. Use this instead of open_file when the user refers to a tab that is already open.',
+		input_schema: objectSchema({
+			query: stringProperty('A concise filename, path, or description of the already-open tab.'),
+		}, ['query']),
+		strict: true,
+	},
+	{
 		name: 'open_symbol',
 		description: 'Pure navigation only: find, open, select, and highlight an existing named workspace symbol. Do not use for questions or requested workspace changes.',
 		input_schema: objectSchema({
@@ -70,6 +80,16 @@ const TOOLS: readonly AnthropicTool[] = [
 		strict: true,
 	},
 	{
+		name: 'control_references',
+		description: 'Navigate a references view that is already open: move to the next or previous result, select a result in a named file, open the selected result, or close the view.',
+		input_schema: objectSchema({
+			action: enumProperty(REFERENCE_CONTROL_ACTIONS, 'The deterministic references-view action.'),
+			file: stringProperty('For select_file, the filename or path containing the desired result.'),
+			occurrence: integerProperty('For select_file, the one-based occurrence within the named file. Defaults to 1.'),
+		}, ['action']),
+		strict: true,
+	},
+	{
 		name: 'show_call_hierarchy',
 		description: 'Pure navigation only: show true incoming callers or outgoing calls for an explicit, selected, or recently opened symbol.',
 		input_schema: objectSchema({
@@ -77,6 +97,16 @@ const TOOLS: readonly AnthropicTool[] = [
 			symbol: stringProperty('Optional explicit source symbol name. Omit for contextual follow-ups.'),
 			file: stringProperty('Optional filename or path hint for the explicit symbol.'),
 		}, ['direction']),
+		strict: true,
+	},
+	{
+		name: 'control_call_hierarchy',
+		description: 'Navigate a call hierarchy that is already open: move between calls, select a call semantically, traverse deeper or to the parent, switch direction, open the selected call, or close the view.',
+		input_schema: objectSchema({
+			action: enumProperty(CALL_HIERARCHY_CONTROL_ACTIONS, 'The deterministic call-hierarchy action.'),
+			query: stringProperty('For select, the symbol or caller/callee to select.'),
+			file: stringProperty('Optional filename or path hint for select.'),
+		}, ['action']),
 		strict: true,
 	},
 	{
@@ -197,6 +227,10 @@ function objectSchema(properties: Record<string, unknown>, required: readonly st
 
 function stringProperty(description: string): Record<string, unknown> {
 	return { type: 'string', description };
+}
+
+function integerProperty(description: string): Record<string, unknown> {
+	return { type: 'integer', minimum: 1, description };
 }
 
 function enumProperty(values: readonly string[], description: string): Record<string, unknown> {

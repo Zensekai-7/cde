@@ -36,6 +36,50 @@ test('parses a direct Haiku response', () => {
 	});
 });
 
+test('parses semantic open-tab and nested navigation tool calls', () => {
+	assert.deepStrictEqual(parseHaikuToolRoute({
+		content: [{
+			type: 'tool_use',
+			name: 'focus_open_file',
+			input: { query: 'the checkout tab' },
+		}],
+	}), {
+		type: 'tool',
+		dispatch: {
+			name: 'focus_open_file',
+			arguments: '{"query":"the checkout tab"}',
+		},
+	});
+
+	assert.deepStrictEqual(parseHaikuToolRoute({
+		content: [{
+			type: 'tool_use',
+			name: 'control_references',
+			input: { action: 'select_file', file: 'checkout.ts', occurrence: 2 },
+		}],
+	}), {
+		type: 'tool',
+		dispatch: {
+			name: 'control_references',
+			arguments: '{"action":"select_file","file":"checkout.ts","occurrence":2}',
+		},
+	});
+
+	assert.deepStrictEqual(parseHaikuToolRoute({
+		content: [{
+			type: 'tool_use',
+			name: 'control_call_hierarchy',
+			input: { action: 'deeper' },
+		}],
+	}), {
+		type: 'tool',
+		dispatch: {
+			name: 'control_call_hierarchy',
+			arguments: '{"action":"deeper"}',
+		},
+	});
+});
+
 test('rejects an invalid Haiku tool call', () => {
 	assert.strictEqual(parseHaikuToolRoute({
 		content: [{

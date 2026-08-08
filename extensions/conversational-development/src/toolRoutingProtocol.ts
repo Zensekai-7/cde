@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-export type CdeToolName = 'open_file' | 'open_symbol' | 'show_references' | 'show_call_hierarchy' | 'go_to_definition' | 'control_editor' | 'ask_codebase' | 'implement_change';
+export type CdeToolName = 'open_file' | 'focus_open_file' | 'open_symbol' | 'show_references' | 'control_references' | 'show_call_hierarchy' | 'control_call_hierarchy' | 'go_to_definition' | 'control_editor' | 'ask_codebase' | 'implement_change';
 
 export interface ToolDispatch {
 	readonly name: CdeToolName;
@@ -50,9 +50,12 @@ function isToolUse(value: unknown): value is AnthropicToolUse {
 
 function isCdeToolName(name: string): name is CdeToolName {
 	return name === 'open_file'
+		|| name === 'focus_open_file'
 		|| name === 'open_symbol'
 		|| name === 'show_references'
+		|| name === 'control_references'
 		|| name === 'show_call_hierarchy'
+		|| name === 'control_call_hierarchy'
 		|| name === 'go_to_definition'
 		|| name === 'control_editor'
 		|| name === 'ask_codebase'
