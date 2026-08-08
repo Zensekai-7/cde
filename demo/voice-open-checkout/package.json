@@ -1,0 +1,9 @@
+{
+	"name": "voice-open-checkout-demo",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"test": "node --test tests/checkout.test.mjs",
+		"typecheck": "../../node_modules/.bin/tsc --noEmit"
+	}
+}
