@@ -49,3 +49,14 @@ test('does not attach an earlier tool result to a newer turn', () => {
 	assert.strictEqual(turns[1].outcome, undefined);
 	assert.notStrictEqual(firstTurn, secondTurn);
 });
+
+test('remembers files changed by a delegated background job', () => {
+	const store = new ConversationContextStore();
+	const turn = store.beginTurn('Handle the checkout guard in the background.', { visibleFiles: [] });
+	store.recordOutcome(turn, {
+		ok: true,
+		spoken_response: 'Done.',
+		job: { changed_files: ['src/checkout.ts', 'tests/checkout.test.ts'] },
+	});
+	assert.deepEqual(store.getContext().relatedFiles, ['src/checkout.ts', 'tests/checkout.test.ts']);
+});

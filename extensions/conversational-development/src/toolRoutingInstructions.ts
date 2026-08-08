@@ -13,4 +13,6 @@ Choose run_terminal_command for explicit shell execution and control_terminal fo
 
 Choose control_background_job when the user asks which background jobs exist, how one is progressing, what it changed, to show its diff, to apply it, to cancel it, or to discard it. Never apply a background result automatically or infer approval from a request to inspect its result.
 
+Treat delegated work like a continuing conversation. Route "how is that going" or "what did it change" to inspect, "show me" or "let me see it" to show_diff, "bring it in" or "use that change" to apply, "stop that" to cancel, and "forget it" to discard when the recent conversation makes the background-job reference clear. For pronouns such as "it", "that", or "this change", omit the job argument so CDE uses the last discussed job. Preserve an explicit label, and pass relational references such as "the other one", "the latest", or "the finished one" in the job argument. The job manager will ask for clarification rather than guess when a reference matches multiple jobs.
+
 Use the recent CDE conversation to resolve follow-ups such as "that", "this", "another one", and references to recently changed or opened code. Never answer in prose outside a tool call. Do not call more than one tool.`;

@@ -9,7 +9,7 @@ import * as vscode from 'vscode';
 import { CodeGenerationController, CodeGenerationEditorContext, CodeGenerationToolResult, captureCodeGenerationEditorContext } from './codeGeneration';
 import { CodeGenerationProgress } from './codeGenerationProtocol';
 import { ConversationContext } from './conversationContext';
-import { BackgroundJobAction, BackgroundJobStatus, BackgroundJobToolResult, BackgroundJobView, normalizeBackgroundJobLabel } from './backgroundJobsProtocol';
+import { BackgroundJobAction, BackgroundJobStatus, BackgroundJobToolResult, BackgroundJobView, describeBackgroundJob, normalizeBackgroundJobLabel, resolveBackgroundJobReference, spokenBackgroundJobLabel, summarizeBackgroundJobs } from './backgroundJobsProtocol';
 
 const MAX_CONCURRENT_JOBS = 2;
 const MAX_QUEUED_JOBS = 5;
@@ -50,12 +50,15 @@ interface GitError extends Error {
 	readonly stderr?: string;
 }
 
+class BackgroundJobInteractionError extends Error { }
+
 export class BackgroundJobManager implements vscode.Disposable {
 	private readonly jobs = new Map<string, BackgroundJob>();
 	private readonly changeEmitter = new vscode.EventEmitter<BackgroundJobView>();
 	private sequence = 0;
 	private activeJobs = 0;
 	private disposed = false;
+	private lastReferencedJobId: string | undefined;
 
 	readonly onDidChange = this.changeEmitter.event;
 
@@ -95,8 +98,8 @@ export class BackgroundJobManager implements vscode.Disposable {
 			}
 
 			const id = `job-${++this.sequence}`;
-			const fallbackLabel = `background-${this.sequence}`;
-			const label = normalizeBackgroundJobLabel(requestedLabel || fallbackLabel) || fallbackLabel;
+			const fallbackLabel = normalizeBackgroundJobLabel(request) || `background-${this.sequence}`;
+			const label = this.uniqueLabel(normalizeBackgroundJobLabel(requestedLabel || fallbackLabel) || fallbackLabel);
 			const job: BackgroundJob = {
 				id,
 				label,
@@ -108,22 +111,23 @@ export class BackgroundJobManager implements vscode.Disposable {
 				conversation,
 				storageUri: vscode.Uri.joinPath(this.storageRoot, 'background-jobs', id),
 				status: 'queued',
-				progress: 'Waiting to start…',
+				progress: 'Waiting for a free worker…',
 				changedFiles: [],
 				cancelRequested: false,
 				discardRequested: false,
 			};
 			this.jobs.set(id, job);
+			this.lastReferencedJobId = id;
 			this.emit(job);
 			this.drainQueue();
 			return {
 				ok: true,
 				job: this.view(job),
-				spoken_response: `Started ${label} in the background.`,
-				display_response: `${label} is queued as ${id}. You can continue working while it runs.`,
+				spoken_response: `Got it. I'll handle ${spokenBackgroundJobLabel(label)} in the background.`,
+				display_response: `I'm working on ${spokenBackgroundJobLabel(label)} separately. You can keep going here.`,
 			};
 		} catch (error) {
-			return failure('I could not start that background job.', error);
+			return failure("I couldn't start that in the background.", error);
 		}
 	}
 
@@ -132,7 +136,8 @@ export class BackgroundJobManager implements vscode.Disposable {
 			if (action === 'list') {
 				return this.list();
 			}
-			const job = this.resolveJob(query);
+			const job = this.resolveJob(action, query);
+			this.lastReferencedJobId = job.id;
 			switch (action) {
 				case 'inspect':
 					return this.inspect(job);
@@ -146,7 +151,10 @@ export class BackgroundJobManager implements vscode.Disposable {
 					return await this.discard(job);
 			}
 		} catch (error) {
-			return failure('I could not complete that background-job action.', error);
+			return failure(
+				error instanceof BackgroundJobInteractionError ? error.message : 'I hit a problem while handling that background change.',
+				error,
+			);
 		}
 	}
 
@@ -167,7 +175,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 			}
 			this.activeJobs += 1;
 			next.status = 'preparing';
-			next.progress = 'Creating an isolated worktree…';
+			next.progress = 'Getting a clean workspace ready…';
 			this.emit(next);
 			void this.run(next).finally(() => {
 				this.activeJobs -= 1;
@@ -190,7 +198,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 			}
 
 			job.status = 'running';
-			job.progress = 'Inspecting the isolated workspace…';
+			job.progress = 'Looking through the code…';
 			job.abortController = new AbortController();
 			this.emit(job);
 			const jobWorkspacePath = job.workspaceRelativePath
@@ -261,29 +269,24 @@ export class BackgroundJobManager implements vscode.Disposable {
 		return {
 			ok: true,
 			jobs,
-			spoken_response: jobs.length === 0
-				? 'There are no background jobs.'
-				: `Background jobs: ${jobs.map(job => `${job.label}, ${job.status}`).join('; ')}.`,
+			spoken_response: summarizeBackgroundJobs(jobs),
 			display_response: jobs.length === 0
 				? 'No background jobs.'
-				: jobs.map(job => `${job.label} (${job.id}): ${job.status}`).join('\n'),
+				: jobs.map(job => `${spokenBackgroundJobLabel(job.label)}: ${job.status}`).join('\n'),
 		};
 	}
 
 	private inspect(job: BackgroundJob): BackgroundJobToolResult {
-		const changed = job.changedFiles.length > 0
-			? ` It changed ${job.changedFiles.length} file${job.changedFiles.length === 1 ? '' : 's'}.`
-			: '';
 		return {
 			ok: true,
 			job: this.view(job),
-			spoken_response: `${job.label} is ${job.status}.${changed}`,
+			spoken_response: describeBackgroundJob(this.view(job)),
 			display_response: job.result?.display_response || job.progress || `${job.label} is ${job.status}.`,
 		};
 	}
 
 	private async showDiff(job: BackgroundJob, fileQuery?: string): Promise<BackgroundJobToolResult> {
-		this.requireCompleted(job);
+		this.requireCompleted(job, 'show');
 		if (!job.baseCommit || !job.worktreePath || job.changedFiles.length === 0) {
 			throw new Error(`${job.label} has no changed files to show.`);
 		}
@@ -301,12 +304,12 @@ export class BackgroundJobManager implements vscode.Disposable {
 			ok: true,
 			job: this.view(job),
 			file,
-			spoken_response: `Showing ${file} from ${job.label}.`,
+			spoken_response: `Here's the diff for ${spokenBackgroundJobLabel(job.label)}.`,
 		};
 	}
 
 	private async apply(job: BackgroundJob): Promise<BackgroundJobToolResult> {
-		this.requireCompleted(job);
+		this.requireCompleted(job, 'apply');
 		if (!job.baseCommit || job.patch === undefined) {
 			throw new Error(`${job.label} has no completed patch.`);
 		}
@@ -315,7 +318,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 			job.completedAt = Date.now();
 			this.emit(job);
 			await this.removeWorktree(job);
-			return { ok: true, job: this.view(job), spoken_response: `${job.label} had no changes to apply.` };
+			return { ok: true, job: this.view(job), spoken_response: `${spokenBackgroundJobLabel(job.label)} finished without making any changes.` };
 		}
 
 		const conflicts: string[] = [];
@@ -340,7 +343,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 		return {
 			ok: true,
 			job: this.view(job),
-			spoken_response: `Applied ${job.label} to the workspace.`,
+			spoken_response: `Done. I brought ${spokenBackgroundJobLabel(job.label)} into your workspace.`,
 			display_response: job.progress,
 		};
 	}
@@ -357,9 +360,9 @@ export class BackgroundJobManager implements vscode.Disposable {
 			job.progress = 'Cancelling…';
 			this.emit(job);
 		} else {
-			return { ok: true, job: this.view(job), spoken_response: `${job.label} is already ${job.status}.` };
+			return { ok: true, job: this.view(job), spoken_response: describeBackgroundJob(this.view(job)) };
 		}
-		return { ok: true, job: this.view(job), spoken_response: `Cancelled ${job.label}.` };
+		return { ok: true, job: this.view(job), spoken_response: `Okay. I stopped ${spokenBackgroundJobLabel(job.label)}.` };
 	}
 
 	private async discard(job: BackgroundJob): Promise<BackgroundJobToolResult> {
@@ -372,7 +375,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 			this.emit(job);
 			await this.removeWorktree(job);
 		}
-		return { ok: true, job: this.view(job), spoken_response: `Discarded ${job.label}.` };
+		return { ok: true, job: this.view(job), spoken_response: `Okay. I discarded ${spokenBackgroundJobLabel(job.label)}.` };
 	}
 
 	private async matchesBaseline(job: BackgroundJob, file: string): Promise<boolean> {
@@ -393,31 +396,54 @@ export class BackgroundJobManager implements vscode.Disposable {
 		}
 	}
 
-	private requireCompleted(job: BackgroundJob): void {
+	private requireCompleted(job: BackgroundJob, action: 'show' | 'apply'): void {
 		if (job.status !== 'completed') {
-			throw new Error(`${job.label} is ${job.status}, not completed.`);
+			const status = describeBackgroundJob(this.view(job));
+			throw new BackgroundJobInteractionError(action === 'apply'
+				? `${status} It isn't ready to bring in yet.`
+				: `${status} There isn't a finished diff to show yet.`);
 		}
 	}
 
-	private resolveJob(query?: string): BackgroundJob {
-		const jobs = [...this.jobs.values()].sort((left, right) => right.createdAt - left.createdAt);
-		if (!query) {
-			const latest = jobs[0];
-			if (!latest) {
-				throw new Error('There are no background jobs yet.');
+	private resolveJob(action: BackgroundJobAction, query?: string): BackgroundJob {
+		const jobs = [...this.jobs.values()];
+		const resolution = resolveBackgroundJobReference(
+			jobs.map(job => this.view(job)),
+			query,
+			this.lastReferencedJobId,
+			preferredStatuses(action),
+		);
+		if (resolution.kind === 'resolved') {
+			return this.jobs.get(resolution.job.id)!;
+		}
+		if (resolution.kind === 'ambiguous') {
+			throw new BackgroundJobInteractionError(`Did you mean ${humanJoin(resolution.candidates.map(candidate => spokenBackgroundJobLabel(candidate.label)))}?`);
+		}
+		if (jobs.length === 0) {
+			throw new BackgroundJobInteractionError("I don't have any background jobs yet.");
+		}
+		if (!query && (action === 'apply' || action === 'show_diff')) {
+			throw new BackgroundJobInteractionError('Nothing is ready to review yet.');
+		}
+		if (!query && action === 'cancel') {
+			throw new BackgroundJobInteractionError('Nothing is running in the background right now.');
+		}
+		throw new BackgroundJobInteractionError(`I couldn't tell which background job you meant. I have ${humanJoin(jobs.map(job => spokenBackgroundJobLabel(job.label)))}.`);
+	}
+
+	private uniqueLabel(candidate: string): string {
+		if (![...this.jobs.values()].some(job => job.label === candidate)) {
+			return candidate;
+		}
+		let occurrence = 2;
+		while (true) {
+			const suffix = `-${occurrence}`;
+			const label = `${candidate.slice(0, 48 - suffix.length)}${suffix}`;
+			if (![...this.jobs.values()].some(job => job.label === label)) {
+				return label;
 			}
-			return latest;
+			occurrence += 1;
 		}
-		const normalized = normalizeBackgroundJobLabel(query);
-		const exact = jobs.find(job => job.id === query || job.label === normalized);
-		if (exact) {
-			return exact;
-		}
-		const partial = jobs.find(job => job.label.includes(normalized));
-		if (!partial) {
-			throw new Error(`No background job matches ${query}.`);
-		}
-		return partial;
 	}
 
 	private view(job: BackgroundJob): BackgroundJobView {
@@ -536,6 +562,28 @@ function normalizeRelativePath(value: string): string {
 
 function splitLines(value: string): string[] {
 	return value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+}
+
+function preferredStatuses(action: BackgroundJobAction): readonly BackgroundJobStatus[] {
+	switch (action) {
+		case 'apply':
+		case 'show_diff':
+			return ['completed'];
+		case 'cancel':
+			return ['queued', 'preparing', 'running'];
+		default:
+			return [];
+	}
+}
+
+function humanJoin(values: readonly string[]): string {
+	if (values.length <= 1) {
+		return values[0] ?? '';
+	}
+	if (values.length === 2) {
+		return `${values[0]} or ${values[1]}`;
+	}
+	return `${values.slice(0, -1).join(', ')}, or ${values.at(-1)}`;
 }
 
 function errorMessage(error: unknown): string {

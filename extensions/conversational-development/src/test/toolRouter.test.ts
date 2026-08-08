@@ -19,6 +19,13 @@ test('reserves background jobs for explicit parallel work and explicit applicati
 	assert.match(ROUTING_INSTRUCTIONS, /Never apply a background result automatically/);
 });
 
+test('routes human background-job follow-ups without requiring job ids', () => {
+	assert.match(ROUTING_INSTRUCTIONS, /how is that going/);
+	assert.match(ROUTING_INSTRUCTIONS, /bring it in/);
+	assert.match(ROUTING_INSTRUCTIONS, /omit the job argument so CDE uses the last discussed job/);
+	assert.match(ROUTING_INSTRUCTIONS, /ask for clarification rather than guess/);
+});
+
 test('parses a strict Haiku IDE tool call', () => {
 	assert.deepStrictEqual(parseHaikuToolRoute({
 		content: [{
