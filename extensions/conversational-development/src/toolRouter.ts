@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { getAnthropicApiKey } from './apiKeys';
+import { BACKGROUND_JOB_ACTIONS } from './backgroundJobsProtocol';
 import { ConversationContext, formatConversationContext } from './conversationContext';
 import {
 	CALL_HIERARCHY_CONTROL_ACTIONS,
@@ -154,11 +155,30 @@ const TOOLS: readonly AnthropicTool[] = [
 	},
 	{
 		name: 'implement_change',
-		description: 'Workspace change only: inspect the repository, make the requested scoped change with Sonnet, then open the most relevant changed file. A named symbol is implementation context, not a navigation request. Do not use for questions or pure navigation.',
+		description: 'Foreground workspace change only: inspect the repository, make the requested scoped change with Sonnet, then open the most relevant changed file. A named symbol is implementation context, not a navigation request. Use this for normal edits; do not use it when the user explicitly asks the work to run in the background, asynchronously, or while they do something else.',
 		input_schema: objectSchema({
 			request: stringProperty('The complete code change requested by the user.'),
 			placement: enumProperty(EDITOR_PLACEMENTS, 'Where to open the primary changed file. Omit for the current editor.'),
 		}, ['request']),
+		strict: true,
+	},
+	{
+		name: 'start_background_change',
+		description: 'Start an isolated coding job only when the user explicitly asks for a code change to run in the background, asynchronously, in parallel, or while they continue other work. The result is not applied automatically.',
+		input_schema: objectSchema({
+			request: stringProperty('The complete code change requested by the user.'),
+			label: stringProperty('An optional short memorable name for later status, diff, apply, cancel, or discard requests.'),
+		}, ['request']),
+		strict: true,
+	},
+	{
+		name: 'control_background_job',
+		description: 'List, inspect, show a diff for, explicitly apply, cancel, or discard an existing background coding job. Never apply a completed job unless the user directly asks to apply it.',
+		input_schema: objectSchema({
+			action: enumProperty(BACKGROUND_JOB_ACTIONS, 'The background-job lifecycle action.'),
+			job: stringProperty('Optional job id or semantic label. Omit to target the most recent job.'),
+			file: stringProperty('Optional changed filename for show_diff.'),
+		}, ['action']),
 		strict: true,
 	},
 	{
