@@ -13,6 +13,15 @@
 	const assistantText = document.getElementById('assistantText');
 	const events = document.getElementById('events');
 	const remoteAudio = document.getElementById('remoteAudio');
+	const walkthroughSection = document.getElementById('walkthrough');
+	const walkthroughProgress = document.getElementById('walkthroughProgress');
+	const walkthroughSteps = document.getElementById('walkthroughSteps');
+	const walkthroughFollowButton = document.getElementById('walkthroughFollow');
+	const walkthroughPreviousButton = document.getElementById('walkthroughPrevious');
+	const walkthroughPauseButton = document.getElementById('walkthroughPause');
+	const walkthroughRepeatButton = document.getElementById('walkthroughRepeat');
+	const walkthroughNextButton = document.getElementById('walkthroughNext');
+	const walkthroughStopButton = document.getElementById('walkthroughStop');
 
 	let peerConnection;
 	let dataChannel;
@@ -28,6 +37,7 @@
 	let responseInProgress = false;
 	let responseCreateRequested = false;
 	let activeRouteRequestId;
+	let activeWalkthrough;
 	const pendingSdp = new Map();
 	const handledCalls = new Set();
 	const pendingTools = new Map();
@@ -136,6 +146,7 @@
 			requestId,
 			sessionEpoch: activeSessionEpoch,
 			transcript,
+			walkthroughActive: Boolean(activeWalkthrough && !activeWalkthrough.completed),
 		});
 	}
 
@@ -147,6 +158,357 @@
 			instructions: `Speak only the string value in this JSON and add nothing: ${JSON.stringify(text)}`,
 			tool_choice: 'none',
 		});
+	}
+
+	function renderWalkthrough() {
+		if (!activeWalkthrough) {
+			walkthroughSection.hidden = true;
+			walkthroughSteps.replaceChildren();
+			return;
+		}
+
+		walkthroughSection.hidden = false;
+		const currentNumber = activeWalkthrough.index + 1;
+		walkthroughProgress.textContent = activeWalkthrough.completed
+			? `Complete · ${activeWalkthrough.steps.length} steps`
+			: activeWalkthrough.paused
+				? `Paused · ${currentNumber} of ${activeWalkthrough.steps.length}`
+				: `${currentNumber} of ${activeWalkthrough.steps.length}`;
+		walkthroughFollowButton.textContent = activeWalkthrough.follow ? 'Follow On' : 'Follow Off';
+		walkthroughFollowButton.setAttribute('aria-pressed', String(activeWalkthrough.follow));
+		walkthroughPauseButton.textContent = activeWalkthrough.paused ? 'Resume' : 'Pause';
+		walkthroughPreviousButton.disabled = activeWalkthrough.index <= 0;
+		walkthroughNextButton.disabled = activeWalkthrough.index >= activeWalkthrough.steps.length - 1;
+		walkthroughPauseButton.disabled = activeWalkthrough.completed;
+		walkthroughRepeatButton.disabled = activeWalkthrough.index < 0;
+
+		const items = activeWalkthrough.steps.map((step, index) => {
+			const item = document.createElement('li');
+			if (index === activeWalkthrough.index) {
+				item.classList.add('current');
+			} else if (index < activeWalkthrough.index || activeWalkthrough.completed) {
+				item.classList.add('visited');
+			}
+			if (activeWalkthrough.failedSteps.has(index)) {
+				item.classList.add('failed');
+			}
+
+			const button = document.createElement('button');
+			button.type = 'button';
+			button.className = 'walkthrough-step';
+			button.title = `Open ${step.path}:${step.start_line}`;
+			button.addEventListener('click', () => goToWalkthroughStep(index, true));
+
+			const marker = document.createElement('span');
+			marker.className = 'walkthrough-marker';
+			marker.textContent = String(index + 1);
+			const copy = document.createElement('span');
+			copy.className = 'walkthrough-step-copy';
+			const title = document.createElement('strong');
+			title.textContent = step.title;
+			const location = document.createElement('small');
+			location.textContent = `${step.path}:${step.start_line}`;
+			copy.append(title, location);
+			button.append(marker, copy);
+			item.append(button);
+			return item;
+		});
+		walkthroughSteps.replaceChildren(...items);
+	}
+
+	function walkthroughMetadata(response) {
+		const metadata = response?.metadata;
+		if (metadata?.cde_kind !== 'walkthrough') {
+			return undefined;
+		}
+		return {
+			walkthroughId: metadata.cde_walkthrough_id,
+			stepIndex: Number(metadata.cde_step_index),
+		};
+	}
+
+	function removeQueuedWalkthroughResponses(walkthroughId) {
+		for (let index = queuedResponses.length - 1; index >= 0; index -= 1) {
+			if (queuedResponses[index]?.metadata?.cde_walkthrough_id === walkthroughId) {
+				queuedResponses.splice(index, 1);
+			}
+		}
+	}
+
+	function cancelWalkthroughNarration() {
+		if (!activeWalkthrough) {
+			return;
+		}
+		removeQueuedWalkthroughResponses(activeWalkthrough.id);
+		if (activeWalkthrough.responseId) {
+			try {
+				sendEvent({ type: 'response.cancel', response_id: activeWalkthrough.responseId });
+				sendEvent({ type: 'output_audio_buffer.clear' });
+			} catch (error) {
+				log('walkthrough.cancel.error', error.message);
+			}
+		}
+		activeWalkthrough.responseId = undefined;
+	}
+
+	function clearWalkthrough(cancelNarration = true) {
+		if (cancelNarration) {
+			cancelWalkthroughNarration();
+		}
+		activeWalkthrough = undefined;
+		walkthroughSection.hidden = true;
+		walkthroughSteps.replaceChildren();
+		vscode.postMessage({ type: 'resetWalkthrough' });
+	}
+
+	function pauseWalkthroughForInput() {
+		if (!activeWalkthrough || activeWalkthrough.completed) {
+			return;
+		}
+		activeWalkthrough.paused = true;
+		removeQueuedWalkthroughResponses(activeWalkthrough.id);
+		renderWalkthrough();
+	}
+
+	function startWalkthrough(message) {
+		clearWalkthrough();
+		activeWalkthrough = {
+			id: `${message.sessionEpoch}-${message.callId}`,
+			steps: message.result.walkthrough,
+			fallback: message.result.spoken_response,
+			display: message.result.display_response,
+			index: -1,
+			follow: true,
+			paused: false,
+			completed: false,
+			responseId: undefined,
+			pendingReveal: undefined,
+			failedSteps: new Set(),
+			narratedSteps: new Set(),
+		};
+		renderWalkthrough();
+		goToWalkthroughStep(0);
+	}
+
+	function requestWalkthroughReveal(narrateAfterReveal) {
+		if (!activeWalkthrough || activeWalkthrough.index < 0) {
+			return;
+		}
+		const requestId = nextId('walkthrough');
+		activeWalkthrough.pendingReveal = {
+			requestId,
+			stepIndex: activeWalkthrough.index,
+			narrateAfterReveal,
+		};
+		setState('acting', 'Following the code…');
+		vscode.postMessage({
+			type: 'revealWalkthroughStep',
+			requestId,
+			sessionEpoch: activeSessionEpoch,
+			walkthroughId: activeWalkthrough.id,
+			stepIndex: activeWalkthrough.index,
+			step: activeWalkthrough.steps[activeWalkthrough.index],
+		});
+	}
+
+	function narrateCurrentWalkthroughStep() {
+		if (!activeWalkthrough || activeWalkthrough.paused || activeWalkthrough.index < 0) {
+			return;
+		}
+		const step = activeWalkthrough.steps[activeWalkthrough.index];
+		assistantText.textContent = step.narration;
+		pinnedToolAnswer = true;
+		awaitingToolFollowup = true;
+		setState('thinking', 'Preparing walkthrough…');
+		queueResponse({
+			conversation: 'none',
+			metadata: {
+				cde_kind: 'walkthrough',
+				cde_walkthrough_id: activeWalkthrough.id,
+				cde_step_index: String(activeWalkthrough.index),
+			},
+			input: [],
+			output_modalities: ['audio'],
+			instructions: `Speak only the string value in this JSON and add nothing: ${JSON.stringify(step.narration)}`,
+			tool_choice: 'none',
+		});
+	}
+
+	function goToWalkthroughStep(index, forceReveal = false) {
+		if (!activeWalkthrough || index < 0 || index >= activeWalkthrough.steps.length) {
+			return;
+		}
+		cancelWalkthroughNarration();
+		activeWalkthrough.index = index;
+		activeWalkthrough.paused = false;
+		activeWalkthrough.completed = false;
+		activeWalkthrough.pendingReveal = undefined;
+		renderWalkthrough();
+		if (activeWalkthrough.follow || forceReveal) {
+			requestWalkthroughReveal(true);
+		} else {
+			narrateCurrentWalkthroughStep();
+		}
+	}
+
+	function finishWalkthrough() {
+		if (!activeWalkthrough) {
+			return;
+		}
+		activeWalkthrough.completed = true;
+		activeWalkthrough.paused = false;
+		activeWalkthrough.responseId = undefined;
+		awaitingToolFollowup = false;
+		assistantText.textContent = activeWalkthrough.display || activeWalkthrough.fallback;
+		renderWalkthrough();
+		setReadyState();
+		log('walkthrough.complete', `${activeWalkthrough.narratedSteps.size}/${activeWalkthrough.steps.length} narrated`);
+		if (activeWalkthrough.narratedSteps.size === 0 && activeWalkthrough.fallback) {
+			speakExact(activeWalkthrough.fallback);
+		}
+	}
+
+	function handleWalkthroughStepReady(message) {
+		const pendingReveal = activeWalkthrough?.pendingReveal;
+		if (!activeWalkthrough
+			|| message.sessionEpoch !== activeSessionEpoch
+			|| message.walkthroughId !== activeWalkthrough.id
+			|| message.stepIndex !== activeWalkthrough.index
+			|| message.requestId !== pendingReveal?.requestId) {
+			log('walkthrough.reveal.stale', message.walkthroughId || 'unknown walkthrough');
+			return;
+		}
+
+		activeWalkthrough.pendingReveal = undefined;
+		log('walkthrough.reveal', JSON.stringify(message.result));
+		if (!message.result.ok) {
+			activeWalkthrough.failedSteps.add(message.stepIndex);
+			renderWalkthrough();
+			if (pendingReveal.narrateAfterReveal && !activeWalkthrough.paused) {
+				const nextIndex = message.stepIndex + 1;
+				if (nextIndex < activeWalkthrough.steps.length) {
+					goToWalkthroughStep(nextIndex);
+				} else {
+					finishWalkthrough();
+				}
+			}
+			return;
+		}
+
+		if (pendingReveal.narrateAfterReveal && !activeWalkthrough.paused) {
+			narrateCurrentWalkthroughStep();
+		} else {
+			setReadyState();
+		}
+	}
+
+	function handleWalkthroughResponseCreated(response) {
+		const metadata = walkthroughMetadata(response);
+		if (!metadata) {
+			return false;
+		}
+		if (activeWalkthrough
+			&& metadata.walkthroughId === activeWalkthrough.id
+			&& metadata.stepIndex === activeWalkthrough.index) {
+			activeWalkthrough.responseId = response.id;
+			setState('speaking', 'Walking through the code…');
+		} else if (response?.id) {
+			try {
+				sendEvent({ type: 'response.cancel', response_id: response.id });
+				sendEvent({ type: 'output_audio_buffer.clear' });
+			} catch (error) {
+				log('walkthrough.stale-cancel.error', error.message);
+			}
+		}
+		return true;
+	}
+
+	function handleWalkthroughResponseDone(response) {
+		const metadata = walkthroughMetadata(response);
+		if (!metadata) {
+			return false;
+		}
+		if (!activeWalkthrough
+			|| metadata.walkthroughId !== activeWalkthrough.id
+			|| metadata.stepIndex !== activeWalkthrough.index) {
+			return true;
+		}
+
+		activeWalkthrough.responseId = undefined;
+		if (response.status !== 'completed' || activeWalkthrough.paused) {
+			setReadyState();
+			return true;
+		}
+
+		activeWalkthrough.narratedSteps.add(activeWalkthrough.index);
+		const nextIndex = activeWalkthrough.index + 1;
+		if (nextIndex < activeWalkthrough.steps.length) {
+			goToWalkthroughStep(nextIndex);
+		} else {
+			finishWalkthrough();
+		}
+		return true;
+	}
+
+	function handleWalkthroughControl(serializedArguments) {
+		let action;
+		try {
+			action = JSON.parse(serializedArguments || '{}').action;
+		} catch {
+			action = undefined;
+		}
+		const allowedActions = ['next', 'previous', 'repeat', 'pause', 'resume', 'stop', 'follow_on', 'follow_off'];
+		if (!allowedActions.includes(action)) {
+			speakExact('I could not understand that walkthrough command.');
+			return;
+		}
+		if (!activeWalkthrough) {
+			speakExact('There is no active walkthrough.');
+			return;
+		}
+
+		switch (action) {
+			case 'next':
+				if (activeWalkthrough.index < activeWalkthrough.steps.length - 1) {
+					goToWalkthroughStep(activeWalkthrough.index + 1);
+				} else {
+					finishWalkthrough();
+					speakExact('That was the final walkthrough step.');
+				}
+				break;
+			case 'previous':
+				goToWalkthroughStep(Math.max(0, activeWalkthrough.index - 1));
+				break;
+			case 'repeat':
+				goToWalkthroughStep(activeWalkthrough.index, true);
+				break;
+			case 'pause':
+				cancelWalkthroughNarration();
+				activeWalkthrough.paused = true;
+				renderWalkthrough();
+				setReadyState();
+				speakExact('Paused the walkthrough.');
+				break;
+			case 'resume':
+				goToWalkthroughStep(activeWalkthrough.index, true);
+				break;
+			case 'stop':
+				clearWalkthrough();
+				setReadyState();
+				speakExact('Stopped the walkthrough.');
+				break;
+			case 'follow_on':
+				activeWalkthrough.follow = true;
+				renderWalkthrough();
+				requestWalkthroughReveal(false);
+				speakExact('Editor following is on.');
+				break;
+			case 'follow_off':
+				activeWalkthrough.follow = false;
+				renderWalkthrough();
+				speakExact('Editor following is off.');
+				break;
+		}
 	}
 
 	async function connect() {
@@ -243,6 +605,7 @@
 		responseInProgress = false;
 		responseCreateRequested = false;
 		activeRouteRequestId = undefined;
+		clearWalkthrough(false);
 		handledCalls.clear();
 		pendingTools.clear();
 		queuedResponses.length = 0;
@@ -268,6 +631,7 @@
 		switch (event.type) {
 			case 'input_audio_buffer.speech_started':
 				pinnedToolAnswer = false;
+				pauseWalkthroughForInput();
 				userBuffer = '';
 				setReadyState();
 				break;
@@ -286,8 +650,10 @@
 			case 'response.created':
 				responseInProgress = true;
 				responseCreateRequested = false;
-				assistantBuffer = '';
-				setState('thinking', 'Thinking…');
+				if (!handleWalkthroughResponseCreated(event.response)) {
+					assistantBuffer = '';
+					setState('thinking', 'Thinking…');
+				}
 				break;
 			case 'response.output_audio_transcript.delta':
 			case 'response.audio_transcript.delta':
@@ -304,11 +670,13 @@
 				const responseStatus = event.response?.status || 'unknown';
 				const responseReason = event.response?.status_details?.reason;
 				log('response.done.detail', `${responseStatus}${responseReason ? ` ${responseReason}` : ''}`);
-				if (pendingTools.size > 0) {
-					setState('acting', 'Using the IDE…');
-				} else {
-					awaitingToolFollowup = false;
-					setReadyState();
+				if (!handleWalkthroughResponseDone(event.response)) {
+					if (pendingTools.size > 0) {
+						setState('acting', 'Using the IDE…');
+					} else {
+						awaitingToolFollowup = false;
+						setReadyState();
+					}
 				}
 				flushQueuedResponse();
 				break;
@@ -353,6 +721,13 @@
 		}
 		activeRouteRequestId = undefined;
 		log('haiku.route.selected', message.name);
+		if (message.name === 'control_walkthrough') {
+			handleWalkthroughControl(message.arguments);
+			return;
+		}
+		if (activeWalkthrough) {
+			clearWalkthrough();
+		}
 		dispatchTool(nextId('haiku-call'), message.name, message.arguments, message.sessionEpoch);
 	}
 
@@ -386,8 +761,12 @@
 		codeGenerationStreams.delete(message.callId);
 		awaitingToolFollowup = true;
 		log('tool.result', JSON.stringify(message.result));
+		if (message.result.ok && Array.isArray(message.result.walkthrough) && message.result.walkthrough.length > 0) {
+			startWalkthrough(message);
+			return;
+		}
 		pinnedToolAnswer = Boolean(message.result.display_response);
-		assistantText.textContent = message.result.spoken_response;
+		assistantText.textContent = message.result.display_response || message.result.spoken_response;
 		speakExact(message.result.spoken_response);
 	}
 
@@ -444,6 +823,9 @@
 			case 'codeGenerationProgress':
 				handleCodeGenerationProgress(message);
 				break;
+			case 'walkthroughStepReady':
+				handleWalkthroughStepReady(message);
+				break;
 			case 'directResult':
 				assistantText.textContent = message.result.spoken_response;
 				log('direct.result', JSON.stringify(message.result));
@@ -453,6 +835,22 @@
 
 	connectButton.addEventListener('click', () => void connect());
 	muteButton.addEventListener('click', () => setMicrophoneMuted(!microphoneMuted));
+	walkthroughFollowButton.addEventListener('click', () => {
+		if (!activeWalkthrough) {
+			return;
+		}
+		handleWalkthroughControl(JSON.stringify({ action: activeWalkthrough.follow ? 'follow_off' : 'follow_on' }));
+	});
+	walkthroughPreviousButton.addEventListener('click', () => handleWalkthroughControl('{"action":"previous"}'));
+	walkthroughPauseButton.addEventListener('click', () => {
+		if (!activeWalkthrough) {
+			return;
+		}
+		handleWalkthroughControl(JSON.stringify({ action: activeWalkthrough.paused ? 'resume' : 'pause' }));
+	});
+	walkthroughRepeatButton.addEventListener('click', () => handleWalkthroughControl('{"action":"repeat"}'));
+	walkthroughNextButton.addEventListener('click', () => handleWalkthroughControl('{"action":"next"}'));
+	walkthroughStopButton.addEventListener('click', () => handleWalkthroughControl('{"action":"stop"}'));
 	directButton.addEventListener('click', () => {
 		const requestId = nextId('direct');
 		log('direct.request');

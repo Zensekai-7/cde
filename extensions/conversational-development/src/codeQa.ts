@@ -201,6 +201,7 @@ function failure(spokenResponse: string, error: string): CodeQaToolResult {
 		ok: false,
 		spoken_response: spokenResponse,
 		display_response: spokenResponse,
+		walkthrough: [],
 		error,
 	};
 }

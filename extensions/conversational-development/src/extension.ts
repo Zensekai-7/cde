@@ -8,8 +8,9 @@ import { getOpenAiApiKey } from './apiKeys';
 import { CodeGenerationController, CodeGenerationToolResult } from './codeGeneration';
 import { CodeGenerationProgress } from './codeGenerationProtocol';
 import { CodeQaController, CodeQaToolResult } from './codeQa';
+import { CodeQaWalkthroughStep } from './codeQaProtocol';
 import { HaikuToolRouter, ToolRoutingContext } from './toolRouter';
-import { CdeToolName } from './toolRoutingProtocol';
+import { CdeToolName, WALKTHROUGH_CONTROL_ACTIONS, WalkthroughControlAction } from './toolRoutingProtocol';
 import {
 	CALL_HIERARCHY_CONTROL_ACTIONS,
 	CALL_HIERARCHY_DIRECTIONS,
@@ -24,6 +25,7 @@ import {
 	REFERENCE_CONTROL_ACTIONS,
 	ReferenceControlAction,
 } from './navigation';
+import { WalkthroughController } from './walkthrough';
 
 const VIEW_ID = 'cde.conversation';
 const SDP_EXCHANGE_TIMEOUT_MS = 15_000;
@@ -38,14 +40,17 @@ interface CdeToolArguments {
 	readonly action?: EditorControlAction;
 	readonly referenceAction?: ReferenceControlAction;
 	readonly callHierarchyAction?: CallHierarchyControlAction;
+	readonly walkthroughAction?: WalkthroughControlAction;
 	readonly direction?: CallHierarchyDirection;
 	readonly occurrence?: number;
 }
 
 type WebviewMessage =
 	| { readonly type: 'exchangeSdp'; readonly requestId: string; readonly sdp: string }
-	| { readonly type: 'routeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly transcript: string }
+	| { readonly type: 'routeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly transcript: string; readonly walkthroughActive: boolean }
 	| { readonly type: 'executeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly callId: string; readonly name: string; readonly arguments: string }
+	| { readonly type: 'revealWalkthroughStep'; readonly requestId: string; readonly sessionEpoch: number; readonly walkthroughId: string; readonly stepIndex: number; readonly step: CodeQaWalkthroughStep }
+	| { readonly type: 'resetWalkthrough' }
 	| { readonly type: 'openCheckoutDirectly'; readonly requestId: string };
 
 const realtimeSession = {
@@ -79,6 +84,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 		private readonly codeQa: CodeQaController,
 		private readonly codeGeneration: CodeGenerationController,
 		private readonly toolRouter: HaikuToolRouter,
+		private readonly walkthrough: WalkthroughController,
 	) { }
 
 	resolveWebviewView(view: vscode.WebviewView): void {
@@ -103,6 +109,22 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 			case 'executeTool':
 				await this.executeTool(message);
 				return;
+			case 'revealWalkthroughStep': {
+				const result = await this.walkthrough.reveal(message.step);
+				this.trace(`walkthrough.reveal index=${message.stepIndex} ${JSON.stringify(result)}`);
+				await this.post({
+					type: 'walkthroughStepReady',
+					requestId: message.requestId,
+					sessionEpoch: message.sessionEpoch,
+					walkthroughId: message.walkthroughId,
+					stepIndex: message.stepIndex,
+					result,
+				});
+				return;
+			}
+			case 'resetWalkthrough':
+				this.walkthrough.reset();
+				return;
 			case 'openCheckoutDirectly': {
 				const result = await this.navigation.openPreparedCheckout();
 				this.trace(`direct.result ${JSON.stringify(result)}`);
@@ -114,7 +136,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 
 	private async routeTool(message: Extract<WebviewMessage, { type: 'routeTool' }>): Promise<void> {
 		try {
-			const route = await this.toolRouter.route(message.transcript, captureToolRoutingContext());
+			const route = await this.toolRouter.route(message.transcript, captureToolRoutingContext(message.walkthroughActive));
 			if (route.type === 'response') {
 				await this.post({
 					type: 'routeResponse',
@@ -238,6 +260,13 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 				case 'ask_codebase':
 					result = await this.codeQa.ask(argumentsValue.question!);
 					break;
+				case 'control_walkthrough':
+					result = {
+						ok: false,
+						spoken_response: 'The walkthrough control is handled by the conversation view.',
+						error: 'Walkthrough control was sent to the extension host instead of the webview.',
+					};
+					break;
 				case 'implement_change':
 					result = await this.implementChange(argumentsValue.request!, argumentsValue.placement, progress => this.reportCodeGenerationProgress(message, progress));
 					break;
@@ -325,6 +354,23 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 			<span class="label">CDE</span>
 			<p id="assistantText">Waiting to connect.</p>
 		</section>
+		<section id="walkthrough" class="walkthrough" hidden>
+			<div class="walkthrough-header">
+				<div>
+					<span class="label">Walkthrough</span>
+					<p id="walkthroughProgress" class="walkthrough-progress"></p>
+				</div>
+				<button id="walkthroughFollow" class="compact" type="button" aria-pressed="true" title="Toggle automatic editor following">Follow On</button>
+			</div>
+			<ol id="walkthroughSteps" class="walkthrough-steps"></ol>
+			<div class="walkthrough-controls">
+				<button id="walkthroughPrevious" class="compact" type="button" title="Previous walkthrough step">Previous</button>
+				<button id="walkthroughPause" class="compact" type="button" title="Pause walkthrough">Pause</button>
+				<button id="walkthroughRepeat" class="compact" type="button" title="Repeat walkthrough step">Repeat</button>
+				<button id="walkthroughNext" class="compact" type="button" title="Next walkthrough step">Next</button>
+				<button id="walkthroughStop" class="compact" type="button" title="Stop walkthrough">Stop</button>
+			</div>
+		</section>
 		<form id="textForm">
 			<input id="textInput" type="text" placeholder="Text fallback" autocomplete="off">
 			<button type="submit" title="Send text">Send</button>
@@ -353,6 +399,7 @@ function isCdeToolName(name: string): name is CdeToolName {
 		|| name === 'go_to_definition'
 		|| name === 'control_editor'
 		|| name === 'ask_codebase'
+		|| name === 'control_walkthrough'
 		|| name === 'implement_change';
 }
 
@@ -383,6 +430,8 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 								? ['action']
 								: toolName === 'ask_codebase'
 									? ['question']
+									: toolName === 'control_walkthrough'
+										? ['action']
 									: ['request', 'placement'];
 		if (Object.keys(value).some(key => !allowedKeys.includes(key))) {
 			return undefined;
@@ -429,6 +478,10 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 		if (toolName === 'control_call_hierarchy' && value.action === 'select' && typeof value.query !== 'string') {
 			return undefined;
 		}
+		if (toolName === 'control_walkthrough'
+			&& (typeof value.action !== 'string' || !WALKTHROUGH_CONTROL_ACTIONS.includes(value.action as WalkthroughControlAction))) {
+			return undefined;
+		}
 		if (toolName === 'show_call_hierarchy'
 			&& (typeof value.direction !== 'string' || !CALL_HIERARCHY_DIRECTIONS.includes(value.direction as CallHierarchyDirection))) {
 			return undefined;
@@ -444,6 +497,7 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			action: toolName === 'control_editor' && typeof value.action === 'string' ? value.action as EditorControlAction : undefined,
 			referenceAction: toolName === 'control_references' && typeof value.action === 'string' ? value.action as ReferenceControlAction : undefined,
 			callHierarchyAction: toolName === 'control_call_hierarchy' && typeof value.action === 'string' ? value.action as CallHierarchyControlAction : undefined,
+			walkthroughAction: toolName === 'control_walkthrough' && typeof value.action === 'string' ? value.action as WalkthroughControlAction : undefined,
 			direction: typeof value.direction === 'string' ? value.direction as CallHierarchyDirection : undefined,
 			occurrence: typeof value.occurrence === 'number' ? value.occurrence : undefined,
 		};
@@ -452,7 +506,7 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 	}
 }
 
-function captureToolRoutingContext(): ToolRoutingContext {
+function captureToolRoutingContext(walkthroughActive: boolean): ToolRoutingContext {
 	const activeEditor = vscode.window.activeTextEditor;
 	const activeFile = activeEditor && activeEditor.document.uri.scheme === 'file'
 		? vscode.workspace.asRelativePath(activeEditor.document.uri, false)
@@ -470,6 +524,7 @@ function captureToolRoutingContext(): ToolRoutingContext {
 		activeLine: activeEditor ? activeEditor.selection.active.line + 1 : undefined,
 		selection,
 		visibleFiles,
+		walkthroughActive,
 	};
 }
 
@@ -499,7 +554,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	const codeQa = new CodeQaController(message => output.appendLine(`${new Date().toISOString()} ${message}`));
 	const codeGeneration = new CodeGenerationController(message => output.appendLine(`${new Date().toISOString()} ${message}`));
 	const toolRouter = new HaikuToolRouter(message => output.appendLine(`${new Date().toISOString()} ${message}`));
-	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter);
+	const walkthrough = new WalkthroughController(highlight);
+	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter, walkthrough);
 	const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	status.name = vscode.l10n.t('CDE Spike');
 	status.text = '$(mic) CDE Spike';

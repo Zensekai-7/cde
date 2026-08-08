@@ -78,6 +78,20 @@ test('parses semantic open-tab and nested navigation tool calls', () => {
 			arguments: '{"action":"deeper"}',
 		},
 	});
+
+	assert.deepStrictEqual(parseHaikuToolRoute({
+		content: [{
+			type: 'tool_use',
+			name: 'control_walkthrough',
+			input: { action: 'previous' },
+		}],
+	}), {
+		type: 'tool',
+		dispatch: {
+			name: 'control_walkthrough',
+			arguments: '{"action":"previous"}',
+		},
+	});
 });
 
 test('rejects an invalid Haiku tool call', () => {

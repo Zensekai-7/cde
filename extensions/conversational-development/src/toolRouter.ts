@@ -11,7 +11,7 @@ import {
 	EDITOR_PLACEMENTS,
 	REFERENCE_CONTROL_ACTIONS,
 } from './navigation';
-import { parseHaikuToolRoute, ToolRoutingResult } from './toolRoutingProtocol';
+import { parseHaikuToolRoute, ToolRoutingResult, WALKTHROUGH_CONTROL_ACTIONS } from './toolRoutingProtocol';
 
 const TOOL_ROUTING_TIMEOUT_MS = 15_000;
 const HAIKU_MODEL = 'claude-haiku-4-5';
@@ -21,6 +21,7 @@ export interface ToolRoutingContext {
 	readonly activeLine?: number;
 	readonly selection?: string;
 	readonly visibleFiles: readonly string[];
+	readonly walkthroughActive: boolean;
 }
 
 interface AnthropicTool {
@@ -136,6 +137,14 @@ const TOOLS: readonly AnthropicTool[] = [
 		strict: true,
 	},
 	{
+		name: 'control_walkthrough',
+		description: 'Control the active narrated code walkthrough without changing repository files. Use only when the user is clearly referring to the current walkthrough.',
+		input_schema: objectSchema({
+			action: enumProperty(WALKTHROUGH_CONTROL_ACTIONS, 'The walkthrough playback or editor-following action.'),
+		}, ['action']),
+		strict: true,
+	},
+	{
 		name: 'implement_change',
 		description: 'Workspace change only: inspect the repository, make the requested scoped edit with Sonnet, then open the most relevant changed file. A mention of an existing symbol is implementation context, not a navigation request. Do not use for questions or pure navigation.',
 		input_schema: objectSchema({
@@ -169,7 +178,7 @@ export class HaikuToolRouter {
 				body: JSON.stringify({
 					model: getHaikuModel(),
 					max_tokens: 256,
-					system: 'You are CDE\'s semantic IDE dispatcher. Call exactly one tool for every request. Decide from the user\'s intended outcome, never exact trigger phrases. A named file or symbol is context: changing it is implement_change, explaining it is ask_codebase, and revealing it is a navigation tool. Use respond_to_user only when no IDE action is requested. Never answer in prose outside a tool call. Do not call more than one tool.',
+					system: 'You are CDE\'s semantic IDE dispatcher. Call exactly one tool for every request. Decide from the user\'s intended outcome, never exact trigger phrases. A named file or symbol is context: changing it is implement_change, explaining it is ask_codebase, and revealing it is a navigation tool. When a narrated walkthrough is active, route short playback requests such as next, back, pause, resume, repeat, stop, or follow to control_walkthrough. Use respond_to_user only when no IDE action is requested. Never answer in prose outside a tool call. Do not call more than one tool.',
 					messages: [{ role: 'user', content: buildRoutingPrompt(request, context) }],
 					tools: TOOLS,
 					tool_choice: { type: 'any', disable_parallel_tool_use: true },
@@ -209,6 +218,7 @@ function buildRoutingPrompt(request: string, context: ToolRoutingContext): strin
 Live editor context:
 - Active location: ${activeLocation}
 - Visible files: ${visibleFiles}
+- Narrated walkthrough active: ${context.walkthroughActive ? 'yes' : 'no'}
 - Selected code:\n${selection}`;
 }
 
