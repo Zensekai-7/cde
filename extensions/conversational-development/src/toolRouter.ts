@@ -274,7 +274,7 @@ function stringProperty(description: string): Record<string, unknown> {
 }
 
 function integerProperty(description: string): Record<string, unknown> {
-	return { type: 'integer', minimum: 1, description };
+	return { type: 'integer', description };
 }
 
 function booleanProperty(description: string): Record<string, unknown> {
