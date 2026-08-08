@@ -38,6 +38,8 @@
 	let responseCreateRequested = false;
 	let activeRouteRequestId;
 	let activeWalkthrough;
+	const WALKTHROUGH_READING_PAUSE_MS = 1_500;
+	const WALKTHROUGH_ACKNOWLEDGEMENT = 'Mm-hm.';
 	const pendingSdp = new Map();
 	const handledCalls = new Set();
 	const pendingTools = new Map();
@@ -218,10 +220,11 @@
 
 	function walkthroughMetadata(response) {
 		const metadata = response?.metadata;
-		if (metadata?.cde_kind !== 'walkthrough') {
+		if (metadata?.cde_kind !== 'walkthrough' && metadata?.cde_kind !== 'walkthrough_acknowledgement') {
 			return undefined;
 		}
 		return {
+			kind: metadata.cde_kind,
 			walkthroughId: metadata.cde_walkthrough_id,
 			stepIndex: Number(metadata.cde_step_index),
 		};
@@ -239,6 +242,7 @@
 		if (!activeWalkthrough) {
 			return;
 		}
+		clearWalkthroughTransitionTimer();
 		removeQueuedWalkthroughResponses(activeWalkthrough.id);
 		if (activeWalkthrough.responseId) {
 			try {
@@ -251,9 +255,19 @@
 		activeWalkthrough.responseId = undefined;
 	}
 
+	function clearWalkthroughTransitionTimer() {
+		if (!activeWalkthrough?.transitionTimer) {
+			return;
+		}
+		clearTimeout(activeWalkthrough.transitionTimer);
+		activeWalkthrough.transitionTimer = undefined;
+	}
+
 	function clearWalkthrough(cancelNarration = true) {
 		if (cancelNarration) {
 			cancelWalkthroughNarration();
+		} else {
+			clearWalkthroughTransitionTimer();
 		}
 		activeWalkthrough = undefined;
 		walkthroughSection.hidden = true;
@@ -265,8 +279,8 @@
 		if (!activeWalkthrough || activeWalkthrough.completed) {
 			return;
 		}
+		cancelWalkthroughNarration();
 		activeWalkthrough.paused = true;
-		removeQueuedWalkthroughResponses(activeWalkthrough.id);
 		renderWalkthrough();
 	}
 
@@ -283,6 +297,7 @@
 			paused: false,
 			completed: false,
 			responseId: undefined,
+			transitionTimer: undefined,
 			pendingReveal: undefined,
 			failedSteps: new Set(),
 			narratedSteps: new Set(),
@@ -336,6 +351,39 @@
 		});
 	}
 
+	function scheduleWalkthroughAcknowledgement() {
+		if (!activeWalkthrough || activeWalkthrough.paused || activeWalkthrough.completed) {
+			return;
+		}
+		const walkthroughId = activeWalkthrough.id;
+		const stepIndex = activeWalkthrough.index;
+		clearWalkthroughTransitionTimer();
+		setState('thinking', 'Reading the highlighted code…');
+		log('walkthrough.acknowledgement.scheduled', `${WALKTHROUGH_READING_PAUSE_MS}ms`);
+		activeWalkthrough.transitionTimer = setTimeout(() => {
+			if (!activeWalkthrough
+				|| activeWalkthrough.id !== walkthroughId
+				|| activeWalkthrough.index !== stepIndex
+				|| activeWalkthrough.paused
+				|| activeWalkthrough.completed) {
+				return;
+			}
+			activeWalkthrough.transitionTimer = undefined;
+			queueResponse({
+				conversation: 'none',
+				metadata: {
+					cde_kind: 'walkthrough_acknowledgement',
+					cde_walkthrough_id: walkthroughId,
+					cde_step_index: String(stepIndex),
+				},
+				input: [],
+				output_modalities: ['audio'],
+				instructions: `Speak only the string value in this JSON and add nothing: ${JSON.stringify(WALKTHROUGH_ACKNOWLEDGEMENT)}`,
+				tool_choice: 'none',
+			});
+		}, WALKTHROUGH_READING_PAUSE_MS);
+	}
+
 	function goToWalkthroughStep(index, forceReveal = false) {
 		if (!activeWalkthrough || index < 0 || index >= activeWalkthrough.steps.length) {
 			return;
@@ -357,6 +405,7 @@
 		if (!activeWalkthrough) {
 			return;
 		}
+		clearWalkthroughTransitionTimer();
 		activeWalkthrough.completed = true;
 		activeWalkthrough.paused = false;
 		activeWalkthrough.responseId = undefined;
@@ -413,7 +462,7 @@
 			&& metadata.walkthroughId === activeWalkthrough.id
 			&& metadata.stepIndex === activeWalkthrough.index) {
 			activeWalkthrough.responseId = response.id;
-			setState('speaking', 'Walking through the code…');
+			setState('speaking', metadata.kind === 'walkthrough_acknowledgement' ? 'Continuing…' : 'Walking through the code…');
 		} else if (response?.id) {
 			try {
 				sendEvent({ type: 'response.cancel', response_id: response.id });
@@ -442,10 +491,16 @@
 			return true;
 		}
 
-		activeWalkthrough.narratedSteps.add(activeWalkthrough.index);
+		if (metadata.kind === 'walkthrough') {
+			activeWalkthrough.narratedSteps.add(activeWalkthrough.index);
+		}
 		const nextIndex = activeWalkthrough.index + 1;
 		if (nextIndex < activeWalkthrough.steps.length) {
-			goToWalkthroughStep(nextIndex);
+			if (metadata.kind === 'walkthrough') {
+				scheduleWalkthroughAcknowledgement();
+			} else {
+				goToWalkthroughStep(nextIndex);
+			}
 		} else {
 			finishWalkthrough();
 		}
