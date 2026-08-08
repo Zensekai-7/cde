@@ -1,5 +1,6 @@
 {
-	"displayName": "TUFF Theme",
-	"description": "A high-voltage black theme with acid green, ultraviolet, and neon cyan accents.",
-	"themeLabel": "TUFF"
+	"displayName": "CDE Themes",
+	"description": "CDE Obsidian and TUFF colour themes.",
+	"obsidianThemeLabel": "CDE Obsidian",
+	"tuffThemeLabel": "TUFF"
 }

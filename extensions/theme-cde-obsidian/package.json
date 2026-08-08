@@ -12,10 +12,16 @@
 	"contributes": {
 		"themes": [
 			{
-				"id": "TUFF",
-				"label": "%themeLabel%",
+				"id": "CDE Obsidian",
+				"label": "%obsidianThemeLabel%",
 				"uiTheme": "vs-dark",
 				"path": "./themes/cde-obsidian-color-theme.json"
+			},
+			{
+				"id": "TUFF",
+				"label": "%tuffThemeLabel%",
+				"uiTheme": "vs-dark",
+				"path": "./themes/tuff-color-theme.json"
 			}
 		]
 	},

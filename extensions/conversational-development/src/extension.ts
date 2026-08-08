@@ -34,7 +34,6 @@ import { WalkthroughController } from './walkthrough';
 
 const VIEW_ID = 'cde.conversation';
 const SDP_EXCHANGE_TIMEOUT_MS = 15_000;
-const VOICE_VIEW_OPENED_KEY = 'cde.voiceViewOpened';
 
 interface CdeToolArguments {
 	readonly query?: string;
@@ -636,7 +635,6 @@ export function activate(context: vscode.ExtensionContext): void {
 	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter, conversation, walkthrough, terminal, terminalInterpreter);
 	const openConversation = async (): Promise<void> => {
 		await vscode.commands.executeCommand('workbench.view.extension.cde');
-		await context.globalState.update(VOICE_VIEW_OPENED_KEY, true);
 	};
 	const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
 	status.name = vscode.l10n.t('CDE Voice');
@@ -660,7 +658,5 @@ export function activate(context: vscode.ExtensionContext): void {
 			void vscode.window.showInformationMessage(vscode.l10n.t('TUFF skin applied.'));
 		}),
 	);
-	if (!context.globalState.get<boolean>(VOICE_VIEW_OPENED_KEY)) {
-		void openConversation();
-	}
+	void openConversation();
 }
