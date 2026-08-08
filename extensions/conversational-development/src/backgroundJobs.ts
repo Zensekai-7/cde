@@ -243,11 +243,16 @@ export class BackgroundJobManager implements vscode.Disposable {
 		if (job.status !== 'running') {
 			return;
 		}
+		let nextProgress: string | undefined;
 		if (progress.kind === 'tool') {
-			job.progress = progress.text;
+			nextProgress = progress.text;
 		} else if (progress.kind === 'code' && progress.file) {
-			job.progress = `Writing ${progress.file}…`;
+			nextProgress = `Writing ${progress.file}…`;
 		}
+		if (!nextProgress || nextProgress === job.progress) {
+			return;
+		}
+		job.progress = nextProgress;
 		this.emit(job);
 	}
 
