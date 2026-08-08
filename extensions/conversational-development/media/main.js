@@ -38,8 +38,7 @@
 	let responseCreateRequested = false;
 	let activeRouteRequestId;
 	let activeWalkthrough;
-	const WALKTHROUGH_READING_PAUSE_MS = 1_500;
-	const WALKTHROUGH_ACKNOWLEDGEMENT = 'Mm-hm.';
+	const WALKTHROUGH_READING_PAUSE_MS = 3_000;
 	const pendingSdp = new Map();
 	const handledCalls = new Set();
 	const pendingTools = new Map();
@@ -220,11 +219,10 @@
 
 	function walkthroughMetadata(response) {
 		const metadata = response?.metadata;
-		if (metadata?.cde_kind !== 'walkthrough' && metadata?.cde_kind !== 'walkthrough_acknowledgement') {
+		if (metadata?.cde_kind !== 'walkthrough') {
 			return undefined;
 		}
 		return {
-			kind: metadata.cde_kind,
 			walkthroughId: metadata.cde_walkthrough_id,
 			stepIndex: Number(metadata.cde_step_index),
 		};
@@ -351,7 +349,7 @@
 		});
 	}
 
-	function scheduleWalkthroughAcknowledgement() {
+	function scheduleWalkthroughAdvance(nextIndex) {
 		if (!activeWalkthrough || activeWalkthrough.paused || activeWalkthrough.completed) {
 			return;
 		}
@@ -359,7 +357,7 @@
 		const stepIndex = activeWalkthrough.index;
 		clearWalkthroughTransitionTimer();
 		setState('thinking', 'Reading the highlighted code…');
-		log('walkthrough.acknowledgement.scheduled', `${WALKTHROUGH_READING_PAUSE_MS}ms`);
+		log('walkthrough.advance.scheduled', `${WALKTHROUGH_READING_PAUSE_MS}ms`);
 		activeWalkthrough.transitionTimer = setTimeout(() => {
 			if (!activeWalkthrough
 				|| activeWalkthrough.id !== walkthroughId
@@ -369,18 +367,7 @@
 				return;
 			}
 			activeWalkthrough.transitionTimer = undefined;
-			queueResponse({
-				conversation: 'none',
-				metadata: {
-					cde_kind: 'walkthrough_acknowledgement',
-					cde_walkthrough_id: walkthroughId,
-					cde_step_index: String(stepIndex),
-				},
-				input: [],
-				output_modalities: ['audio'],
-				instructions: `Speak only the string value in this JSON and add nothing: ${JSON.stringify(WALKTHROUGH_ACKNOWLEDGEMENT)}`,
-				tool_choice: 'none',
-			});
+			goToWalkthroughStep(nextIndex);
 		}, WALKTHROUGH_READING_PAUSE_MS);
 	}
 
@@ -462,7 +449,7 @@
 			&& metadata.walkthroughId === activeWalkthrough.id
 			&& metadata.stepIndex === activeWalkthrough.index) {
 			activeWalkthrough.responseId = response.id;
-			setState('speaking', metadata.kind === 'walkthrough_acknowledgement' ? 'Continuing…' : 'Walking through the code…');
+			setState('speaking', 'Walking through the code…');
 		} else if (response?.id) {
 			try {
 				sendEvent({ type: 'response.cancel', response_id: response.id });
@@ -491,16 +478,10 @@
 			return true;
 		}
 
-		if (metadata.kind === 'walkthrough') {
-			activeWalkthrough.narratedSteps.add(activeWalkthrough.index);
-		}
+		activeWalkthrough.narratedSteps.add(activeWalkthrough.index);
 		const nextIndex = activeWalkthrough.index + 1;
 		if (nextIndex < activeWalkthrough.steps.length) {
-			if (metadata.kind === 'walkthrough') {
-				scheduleWalkthroughAcknowledgement();
-			} else {
-				goToWalkthroughStep(nextIndex);
-			}
+			scheduleWalkthroughAdvance(nextIndex);
 		} else {
 			finishWalkthrough();
 		}
