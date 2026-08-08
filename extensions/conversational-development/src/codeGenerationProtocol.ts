@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ConversationContext, formatConversationContext } from './conversationContext';
+import { WorkspaceIndexChunk } from './workspaceIndexRanking';
 
 export interface CodeGenerationContext {
 	readonly request: string;
@@ -12,6 +13,7 @@ export interface CodeGenerationContext {
 	readonly selection?: string;
 	readonly visibleFiles: readonly string[];
 	readonly conversation?: ConversationContext;
+	readonly indexedChunks?: readonly WorkspaceIndexChunk[];
 }
 
 export interface CodeGenerationAnswer {
@@ -37,6 +39,7 @@ interface StreamingToolCall {
 }
 
 const MAX_SELECTION_CHARS = 6_000;
+const MAX_INDEXED_EVIDENCE_CHARS = 20_000;
 const MAX_DISPLAY_CHARS = 4_000;
 const MAX_CHANGED_FILES = 12;
 
@@ -183,6 +186,7 @@ export function buildCodeGenerationPrompt(context: CodeGenerationContext): strin
 		? truncate(context.selection, MAX_SELECTION_CHARS)
 		: 'none';
 	const conversation = formatConversationContext(context.conversation);
+	const indexedEvidence = formatIndexedEvidence(context.indexedChunks);
 
 	return `Implement the requested repository change directly in the workspace.
 
@@ -197,9 +201,30 @@ Live editor context:
 - Selected code:
 ${selection}
 
-Inspect the relevant code before editing. Use the conversation to resolve follow-ups such as "that", "this", "another one", and "the function you just added". The current request and live editor context take precedence when they conflict. Make the smallest complete change that satisfies the request and preserve surrounding conventions. Use only the available read, search, edit, and write tools; do not run shell commands, browse the web, use MCP, modify files outside the workspace, or make unrelated changes. Treat the selection as the target when the request says "this", "it", or "here".
+Relevant local codebase index (source ranges only):
+${indexedEvidence}
+
+Use the indexed ranges to start from likely code, then inspect the relevant code before editing. Use the conversation to resolve follow-ups such as "that", "this", "another one", and "the function you just added". The current request and live editor context take precedence when they conflict. Make the smallest complete change that satisfies the request and preserve surrounding conventions. Use only the available read, search, edit, and write tools; do not run shell commands, browse the web, use MCP, modify files outside the workspace, or make unrelated changes. Treat the selection as the target when the request says "this", "it", or "here".
 
 When finished, return every changed workspace-relative file in changed_files. Set primary_file to the most useful changed file for the editor to open, and primary_line to a changed one-based line. spoken_response must state only the completed result in the fewest words necessary. If the request cannot be implemented safely from the repository, make no edits and explain why.`;
+}
+
+function formatIndexedEvidence(chunks: readonly WorkspaceIndexChunk[] | undefined): string {
+	if (!chunks || chunks.length === 0) {
+		return 'No matching indexed source was found.';
+	}
+	let remaining = MAX_INDEXED_EVIDENCE_CHARS;
+	const sections: string[] = [];
+	for (const chunk of chunks) {
+		if (remaining <= 0) {
+			break;
+		}
+		const source = chunk.text.split(/\r?\n/).map((line, index) => `${chunk.startLine + index}: ${line}`).join('\n');
+		const section = `--- ${chunk.path}:${chunk.startLine}-${chunk.endLine} ---\n${source}`;
+		sections.push(truncate(section, remaining));
+		remaining -= section.length;
+	}
+	return sections.join('\n\n');
 }
 
 export function parseCodeGenerationAnswer(structuredOutput: unknown, fallback: string): CodeGenerationAnswer | undefined {

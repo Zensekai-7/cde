@@ -5,6 +5,7 @@
   "view.title": "Conversation",
   "command.category": "CDE",
   "command.open": "Open Conversation",
+  "command.applySkin": "Apply Obsidian Skin",
   "configuration.openaiApiKey": "OpenAI API key used by this local Realtime experiment.",
   "configuration.anthropicApiKey": "Anthropic API key used for Claude code Q&A and code generation."
 }

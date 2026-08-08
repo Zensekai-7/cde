@@ -25,6 +25,8 @@
 		"test:navigation": "node --test ./out/test/navigationRanking.test.js",
 		"test:conversation-context": "node --test ./out/test/conversationContext.test.js",
 		"test:code-qa": "node --test ./out/test/codeQaProtocol.test.js",
+		"test:query-cache": "node --test ./out/test/queryCache.test.js",
+		"test:workspace-index": "node --test ./out/test/workspaceIndexRanking.test.js",
     "test:code-generation": "node --test ./out/test/codeGenerationProtocol.test.js",
     "test:tool-routing": "node --test ./out/test/toolRouter.test.js",
     "test:terminal": "node --test ./out/test/terminalProtocol.test.js"
@@ -54,6 +56,11 @@
         "title": "%command.open%",
         "category": "%command.category%",
         "icon": "$(mic-filled)"
+      },
+      {
+        "command": "cde.applyCdeObsidianSkin",
+        "title": "%command.applySkin%",
+        "category": "%command.category%"
       }
     ],
     "configuration": {

@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 import { getAnthropicApiKey } from './apiKeys';
 import { ConversationContext } from './conversationContext';
 import { buildCodeGenerationPrompt, CODE_GENERATION_OUTPUT_SCHEMA, CodeGenerationAnswer, CodeGenerationContext, CodeGenerationProgress, CodeGenerationStreamDecoder, parseCodeGenerationAnswer } from './codeGenerationProtocol';
+import { WorkspaceCodeIndex } from './workspaceIndex';
 
 const CODE_GENERATION_TIMEOUT_MS = 120_000;
 const EDIT_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write'] as const;
@@ -72,7 +73,10 @@ type NativeImport = (specifier: string) => Promise<AgentSdk>;
 const nativeImport = new Function('specifier', 'return import(specifier);') as NativeImport;
 
 export class CodeGenerationController {
-	constructor(private readonly trace: (message: string) => void) { }
+	constructor(
+		private readonly trace: (message: string) => void,
+		private readonly workspaceIndex: WorkspaceCodeIndex,
+	) { }
 
 	async implement(request: string, reportProgress: (progress: CodeGenerationProgress) => void, conversation?: ConversationContext): Promise<CodeGenerationToolResult> {
 		const apiKey = getAnthropicApiKey();
@@ -88,7 +92,14 @@ export class CodeGenerationController {
 			return failure('Open a workspace before asking me to change code.', 'No workspace folder is open.');
 		}
 
-		const context = captureEditorContext(workspaceRoot, request, conversation);
+		const editorContext = captureEditorContext(workspaceRoot, request, conversation);
+		let indexedChunks: CodeGenerationContext['indexedChunks'];
+		try {
+			indexedChunks = (await this.workspaceIndex.query(request, relatedFiles(editorContext))).chunks;
+		} catch (error) {
+			this.trace(`code-generation.index.error ${error instanceof Error ? error.message : String(error)}`);
+		}
+		const context: CodeGenerationContext = { ...editorContext, indexedChunks };
 		const abortController = new AbortController();
 		const timeout = setTimeout(() => abortController.abort(), CODE_GENERATION_TIMEOUT_MS);
 		this.trace(`code-generation.start workspace=${workspaceRoot.fsPath} active=${context.activeFile ?? 'none'}`);
@@ -144,6 +155,14 @@ export class CodeGenerationController {
 			clearTimeout(timeout);
 		}
 	}
+}
+
+function relatedFiles(context: CodeGenerationContext): readonly string[] {
+	return [
+		context.activeFile,
+		...context.visibleFiles,
+		...(context.conversation?.relatedFiles ?? []),
+	].filter((file): file is string => Boolean(file));
 }
 
 function createQueryOptions(workspaceRoot: string, abortController: AbortController, apiKey: string): AgentQueryOptions {

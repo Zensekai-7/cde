@@ -15,9 +15,12 @@ import {
 import { TERMINAL_CONTROL_ACTIONS } from './terminalProtocol';
 import { ROUTING_INSTRUCTIONS } from './toolRoutingInstructions';
 import { parseHaikuToolRoute, ToolRoutingResult, WALKTHROUGH_CONTROL_ACTIONS } from './toolRoutingProtocol';
+import { QueryCache, queryCacheKey } from './queryCache';
 
 const TOOL_ROUTING_TIMEOUT_MS = 15_000;
 const ROUTER_MODEL = 'claude-haiku-4-5-20251001';
+const ROUTER_CACHE_ENTRIES = 64;
+const ROUTER_CACHE_TTL_MS = 2 * 60_000;
 
 export interface ToolRoutingContext {
 	readonly activeFile?: string;
@@ -183,12 +186,20 @@ const TOOLS: readonly AnthropicTool[] = [
 ];
 
 export class SemanticToolRouter {
+	private readonly routeCache = new QueryCache<ToolRoutingResult>(ROUTER_CACHE_ENTRIES, ROUTER_CACHE_TTL_MS);
+
 	constructor(private readonly trace: (message: string) => void) { }
 
 	async route(request: string, context: ToolRoutingContext): Promise<ToolRoutingResult> {
 		const apiKey = getAnthropicApiKey();
 		if (!apiKey) {
 			throw new Error('Set cde.anthropicApiKey or ANTHROPIC_API_KEY before using CDE actions.');
+		}
+		const cacheKey = queryCacheKey('tool-router', { request: normalizeRequest(request), context });
+		const cached = this.routeCache.get(cacheKey);
+		if (cached) {
+			this.trace(`router.route.cache.hit ${cached.type === 'tool' ? cached.dispatch.name : 'respond_to_user'}`);
+			return cached;
 		}
 
 		const abortController = new AbortController();
@@ -221,6 +232,7 @@ export class SemanticToolRouter {
 			if (!route) {
 				throw new Error('Claude router did not return a valid CDE tool call.');
 			}
+			this.routeCache.set(cacheKey, route);
 			this.trace(`router.route.selected ${route.type === 'tool' ? route.dispatch.name : 'respond_to_user'}`);
 			return route;
 		} catch (error) {
@@ -232,6 +244,10 @@ export class SemanticToolRouter {
 			clearTimeout(timeout);
 		}
 	}
+}
+
+function normalizeRequest(request: string): string {
+	return request.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 function buildRoutingPrompt(request: string, context: ToolRoutingContext): string {

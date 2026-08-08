@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ConversationContext, formatConversationContext } from './conversationContext';
+import { WorkspaceIndexChunk } from './workspaceIndexRanking';
 
 export interface CodeQaContext {
 	readonly question: string;
@@ -13,6 +14,7 @@ export interface CodeQaContext {
 	readonly activeFileContent?: string;
 	readonly visibleFiles: readonly string[];
 	readonly conversation?: ConversationContext;
+	readonly indexedChunks?: readonly WorkspaceIndexChunk[];
 }
 
 export interface CodeQaAnswer {
@@ -32,6 +34,7 @@ export interface CodeQaWalkthroughStep {
 
 const MAX_SELECTION_CHARS = 6_000;
 const MAX_ACTIVE_FILE_CHARS = 20_000;
+const MAX_INDEXED_EVIDENCE_CHARS = 28_000;
 const MAX_DISPLAY_CHARS = 4_000;
 const MAX_WALKTHROUGH_STEPS = 5;
 
@@ -101,8 +104,9 @@ export function buildCodeQaPrompt(context: CodeQaContext): string {
 		? truncate(addLineNumbers(context.activeFileContent), MAX_ACTIVE_FILE_CHARS)
 		: 'none';
 	const conversation = formatConversationContext(context.conversation);
+	const indexedEvidence = formatIndexedEvidence(context.indexedChunks);
 
-	return `Answer this repository question from the supplied live editor source when it contains sufficient evidence. Use the read-only repository tools only when evidence is missing or the question requires tracing across files.
+	return `Answer this repository question from the supplied live editor source and local codebase index when either contains sufficient evidence. Use the read-only repository tools only when evidence is missing from those sources or the question requires tracing across files.
 
 Question: ${context.question}
 
@@ -115,13 +119,35 @@ Live editor context:
 - Selected code:\n${selection}
 - Active file source (line-numbered):\n${activeFileContent}
 
-Ground the answer in the repository, not assumptions. Use the conversation to resolve follow-ups such as "that", "this", and "the change you just made". Prefer the live selection when the question says "this", "it", or "here". The current question and live editor context take precedence when they conflict. In display_response, cite every important claim as repository-relative path:line. Keep spoken_response natural and at most 45 words.
+Local codebase index (retrieved source ranges, most relevant first):
+${indexedEvidence}
+
+Ground the answer in the repository, not assumptions. Treat the indexed ranges as source evidence and cite their exact file and line range. Use the conversation to resolve follow-ups such as "that", "this", and "the change you just made". Prefer the live selection when the question says "this", "it", or "here". The current question and live editor context take precedence when they conflict. In display_response, cite every important claim as repository-relative path:line. Keep spoken_response natural and at most 45 words.
 
 Build walkthrough as an intentional explanation path through the most important evidence. Use up to five steps. Each step must identify an exact existing file and tight line range, then narrate only what that location establishes. Follow call flow, data flow, and abstraction boundaries across files when the implementation is nested—for example request handler, service, helper, persistence, and regression test. Do not list loosely related search results or repeat the same location without a reason. Keep each narration to one or two short sentences. If the repository does not establish the answer, say what you could not verify and return only the locations that are genuinely useful.`;
 }
 
-function addLineNumbers(value: string): string {
-	return value.split(/\r?\n/).map((line, index) => `${index + 1}: ${line}`).join('\n');
+function formatIndexedEvidence(chunks: readonly WorkspaceIndexChunk[] | undefined): string {
+	if (!chunks || chunks.length === 0) {
+		return 'No matching indexed source was found.';
+	}
+	let remaining = MAX_INDEXED_EVIDENCE_CHARS;
+	const sections: string[] = [];
+	for (const chunk of chunks) {
+		if (remaining <= 0) {
+			break;
+		}
+		const header = `--- ${chunk.path}:${chunk.startLine}-${chunk.endLine} ---`;
+		const source = addLineNumbers(chunk.text, chunk.startLine);
+		const section = `${header}\n${source}`;
+		sections.push(truncate(section, remaining));
+		remaining -= section.length;
+	}
+	return sections.join('\n\n');
+}
+
+function addLineNumbers(value: string, startLine = 1): string {
+	return value.split(/\r?\n/).map((line, index) => `${startLine + index}: ${line}`).join('\n');
 }
 
 export function parseCodeQaAnswer(structuredOutput: unknown, fallback: string): CodeQaAnswer | undefined {

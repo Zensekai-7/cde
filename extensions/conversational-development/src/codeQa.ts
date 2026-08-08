@@ -10,9 +10,13 @@ import { getAnthropicApiKey } from './apiKeys';
 import { ConversationContext } from './conversationContext';
 import { buildCodeQaPrompt, CODE_QA_OUTPUT_SCHEMA, CodeQaAnswer, CodeQaContext, parseCodeQaAnswer } from './codeQaProtocol';
 import type { EditorPlacement } from './navigation';
+import { QueryCache, queryCacheKey } from './queryCache';
+import { WorkspaceCodeIndex } from './workspaceIndex';
 
 const CODE_QA_TIMEOUT_MS = 60_000;
 const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'] as const;
+const CODE_QA_CACHE_ENTRIES = 48;
+const CODE_QA_CACHE_TTL_MS = 5 * 60_000;
 
 export interface CodeQaToolResult extends CodeQaAnswer {
 	readonly ok: boolean;
@@ -73,7 +77,12 @@ type NativeImport = (specifier: string) => Promise<AgentSdk>;
 const nativeImport = new Function('specifier', 'return import(specifier);') as NativeImport;
 
 export class CodeQaController {
-	constructor(private readonly trace: (message: string) => void) { }
+	private readonly answerCache = new QueryCache<CodeQaToolResult>(CODE_QA_CACHE_ENTRIES, CODE_QA_CACHE_TTL_MS);
+
+	constructor(
+		private readonly trace: (message: string) => void,
+		private readonly workspaceIndex: WorkspaceCodeIndex,
+	) { }
 
 	async ask(question: string, conversation?: ConversationContext): Promise<CodeQaToolResult> {
 		const apiKey = getAnthropicApiKey();
@@ -86,7 +95,23 @@ export class CodeQaController {
 			return failure('Open a workspace before asking a code question.', 'No workspace folder is open.');
 		}
 
-		const context = captureEditorContext(workspaceRoot, question, conversation);
+		const editorContext = captureEditorContext(workspaceRoot, question, conversation);
+		let indexedChunks: CodeQaContext['indexedChunks'];
+		let indexVersion = 0;
+		try {
+			const indexResult = await this.workspaceIndex.query(question, relatedFiles(editorContext));
+			indexedChunks = indexResult.chunks;
+			indexVersion = indexResult.version;
+		} catch (error) {
+			this.trace(`code-qa.index.error ${error instanceof Error ? error.message : String(error)}`);
+		}
+		const context: CodeQaContext = { ...editorContext, indexedChunks };
+		const cacheKey = queryCacheKey('code-qa', { indexVersion, context });
+		const cached = this.answerCache.get(cacheKey);
+		if (cached) {
+			this.trace(`code-qa.cache.hit index_version=${indexVersion}`);
+			return cached;
+		}
 		const abortController = new AbortController();
 		const timeout = setTimeout(() => abortController.abort(), CODE_QA_TIMEOUT_MS);
 		this.trace(`code-qa.start workspace=${workspaceRoot.fsPath} active=${context.activeFile ?? 'none'}`);
@@ -124,7 +149,9 @@ export class CodeQaController {
 				return failure('Claude returned an empty answer.', 'The result contained no usable response.');
 			}
 			this.trace(`code-qa.success turns=${finalResult.num_turns} duration_ms=${finalResult.duration_ms}`);
-			return { ok: true, ...answer };
+			const result = { ok: true, ...answer };
+			this.answerCache.set(cacheKey, result);
+			return result;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.trace(`code-qa.error ${message}`);
@@ -136,6 +163,14 @@ export class CodeQaController {
 			clearTimeout(timeout);
 		}
 	}
+}
+
+function relatedFiles(context: CodeQaContext): readonly string[] {
+	return [
+		context.activeFile,
+		...context.visibleFiles,
+		...(context.conversation?.relatedFiles ?? []),
+	].filter((file): file is string => Boolean(file));
 }
 
 function createQueryOptions(workspaceRoot: string, abortController: AbortController, apiKey: string): AgentQueryOptions {

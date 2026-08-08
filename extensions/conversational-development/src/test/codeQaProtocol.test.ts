@@ -15,6 +15,12 @@ test('buildCodeQaPrompt includes live editor context and the repository question
 		selection: 'return subtotal - discount;',
 		activeFileContent: 'export function calculateFinalPrice() {\n\treturn subtotal - discount;\n}',
 		visibleFiles: ['src/checkout.ts', 'src/cart.ts'],
+		indexedChunks: [{
+			path: 'src/promotions/discount-policy.ts',
+			startLine: 12,
+			endLine: 16,
+			text: 'export const maximumDiscount = 100;\n\nexport function clampDiscount(value: number) {\n\treturn Math.min(value, maximumDiscount);\n}',
+		}],
 		conversation: {
 			recentTurns: [{
 				request: 'Add a discount helper.',
@@ -36,6 +42,8 @@ test('buildCodeQaPrompt includes live editor context and the repository question
 	assert.match(prompt, /the change you just made/);
 	assert.match(prompt, /repository-relative path:line/);
 	assert.match(prompt, /across files/);
+	assert.match(prompt, /src\/promotions\/discount-policy\.ts:12-16/);
+	assert.match(prompt, /12: export const maximumDiscount/);
 });
 
 test('parseCodeQaAnswer prefers structured output', () => {
