@@ -6,7 +6,7 @@
 export const WALKTHROUGH_CONTROL_ACTIONS = ['next', 'previous', 'repeat', 'pause', 'resume', 'stop', 'follow_on', 'follow_off'] as const;
 export type WalkthroughControlAction = typeof WALKTHROUGH_CONTROL_ACTIONS[number];
 
-export type CdeToolName = 'open_file' | 'focus_open_file' | 'open_symbol' | 'show_references' | 'control_references' | 'show_call_hierarchy' | 'control_call_hierarchy' | 'go_to_definition' | 'control_editor' | 'ask_codebase' | 'control_walkthrough' | 'implement_change';
+export type CdeToolName = 'open_file' | 'focus_open_file' | 'open_symbol' | 'show_references' | 'control_references' | 'show_call_hierarchy' | 'control_call_hierarchy' | 'go_to_definition' | 'control_editor' | 'ask_codebase' | 'control_walkthrough' | 'implement_change' | 'run_terminal_command' | 'control_terminal';
 
 export interface ToolDispatch {
 	readonly name: CdeToolName;
@@ -63,7 +63,9 @@ function isCdeToolName(name: string): name is CdeToolName {
 		|| name === 'control_editor'
 		|| name === 'ask_codebase'
 		|| name === 'control_walkthrough'
-		|| name === 'implement_change';
+		|| name === 'implement_change'
+		|| name === 'run_terminal_command'
+		|| name === 'control_terminal';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

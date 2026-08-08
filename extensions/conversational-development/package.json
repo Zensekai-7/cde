@@ -25,7 +25,8 @@
     "test:navigation": "node --test ./out/test/navigationRanking.test.js",
     "test:code-qa": "node --test ./out/test/codeQaProtocol.test.js",
     "test:code-generation": "node --test ./out/test/codeGenerationProtocol.test.js",
-    "test:tool-routing": "node --test ./out/test/toolRouter.test.js"
+    "test:tool-routing": "node --test ./out/test/toolRouter.test.js",
+    "test:terminal": "node --test ./out/test/terminalProtocol.test.js"
   },
   "contributes": {
     "viewsContainers": {

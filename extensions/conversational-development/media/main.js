@@ -698,11 +698,12 @@
 		const requestId = nextId('tool');
 		const isCodeQuestion = name === 'ask_codebase';
 		const isCodeGeneration = name === 'implement_change';
+		const isTerminal = name === 'run_terminal_command' || name === 'control_terminal';
 		if (isCodeGeneration) {
 			codeGenerationStreams.set(callId, { activity: 'Starting the code-writing agent…', text: '' });
 		}
-		setState('acting', isCodeQuestion ? 'Inspecting the codebase…' : isCodeGeneration ? 'Implementing…' : 'Using the IDE…');
-		assistantText.textContent = isCodeQuestion ? 'Reading the relevant code…' : isCodeGeneration ? 'Making the requested change…' : 'Working in the editor…';
+		setState('acting', isCodeQuestion ? 'Inspecting the codebase…' : isCodeGeneration ? 'Implementing…' : isTerminal ? 'Using the terminal…' : 'Using the IDE…');
+		assistantText.textContent = isCodeQuestion ? 'Reading the relevant code…' : isCodeGeneration ? 'Making the requested change…' : isTerminal ? 'Working in a managed terminal…' : 'Working in the editor…';
 		log('tool.dispatch', `${name} ${args || '{}'}`);
 		vscode.postMessage({
 			type: 'executeTool',

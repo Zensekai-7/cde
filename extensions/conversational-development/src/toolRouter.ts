@@ -11,6 +11,7 @@ import {
 	EDITOR_PLACEMENTS,
 	REFERENCE_CONTROL_ACTIONS,
 } from './navigation';
+import { TERMINAL_CONTROL_ACTIONS } from './terminalProtocol';
 import { parseHaikuToolRoute, ToolRoutingResult, WALKTHROUGH_CONTROL_ACTIONS } from './toolRoutingProtocol';
 
 const TOOL_ROUTING_TIMEOUT_MS = 15_000;
@@ -153,6 +154,28 @@ const TOOLS: readonly AnthropicTool[] = [
 		}, ['request']),
 		strict: true,
 	},
+	{
+		name: 'run_terminal_command',
+		description: 'Start or replace a named managed terminal command. Use for tests, builds, development servers, scripts, Git inspection, logs, and other explicit shell work. Do not use for editing source files.',
+		input_schema: objectSchema({
+			command: stringProperty('The exact shell command to execute.'),
+			session: stringProperty('A short stable name used for later follow-up controls.'),
+			cwd: stringProperty('Optional workspace-relative or absolute working directory.'),
+		}, ['command']),
+		strict: true,
+	},
+	{
+		name: 'control_terminal',
+		description: 'Inspect or control a managed terminal session: list or focus sessions, inspect captured output, interrupt or restart work, send input, navigate captured file locations, or close a session.',
+		input_schema: objectSchema({
+			action: enumProperty(TERMINAL_CONTROL_ACTIONS, 'The deterministic terminal action.'),
+			session: stringProperty('Optional session name. Omit to target the most recently used session.'),
+			input: stringProperty('Text to send for send_input.'),
+			submit: booleanProperty('Whether send_input should press Enter. Defaults to true.'),
+			occurrence: integerProperty('For open_location, the one-based captured location to open.'),
+		}, ['action']),
+		strict: true,
+	},
 ];
 
 export class HaikuToolRouter {
@@ -178,7 +201,7 @@ export class HaikuToolRouter {
 				body: JSON.stringify({
 					model: getHaikuModel(),
 					max_tokens: 256,
-					system: 'You are CDE\'s semantic IDE dispatcher. Call exactly one tool for every request. Decide from the user\'s intended outcome, never exact trigger phrases. A named file or symbol is context: changing it is implement_change, explaining it is ask_codebase, and revealing it is a navigation tool. When a narrated walkthrough is active, route short playback requests such as next, back, pause, resume, repeat, stop, or follow to control_walkthrough. Use respond_to_user only when no IDE action is requested. Never answer in prose outside a tool call. Do not call more than one tool.',
+					system: 'You are CDE\'s semantic IDE dispatcher. Call exactly one tool for every request. Decide from the user\'s intended outcome, never exact trigger phrases. A named file or symbol is context: changing it is implement_change, explaining it is ask_codebase, and revealing it is a navigation tool. Use run_terminal_command for explicit shell execution and control_terminal for follow-ups about managed terminal work. When a narrated walkthrough is active, route short playback requests such as next, back, pause, resume, repeat, stop, or follow to control_walkthrough. Use respond_to_user only when no IDE action is requested. Never answer in prose outside a tool call. Do not call more than one tool.',
 					messages: [{ role: 'user', content: buildRoutingPrompt(request, context) }],
 					tools: TOOLS,
 					tool_choice: { type: 'any', disable_parallel_tool_use: true },
@@ -241,6 +264,10 @@ function stringProperty(description: string): Record<string, unknown> {
 
 function integerProperty(description: string): Record<string, unknown> {
 	return { type: 'integer', minimum: 1, description };
+}
+
+function booleanProperty(description: string): Record<string, unknown> {
+	return { type: 'boolean', description };
 }
 
 function enumProperty(values: readonly string[], description: string): Record<string, unknown> {

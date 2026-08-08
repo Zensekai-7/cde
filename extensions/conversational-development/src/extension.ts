@@ -11,6 +11,8 @@ import { CodeQaController, CodeQaToolResult } from './codeQa';
 import { CodeQaWalkthroughStep } from './codeQaProtocol';
 import { HaikuToolRouter, ToolRoutingContext } from './toolRouter';
 import { CdeToolName, WALKTHROUGH_CONTROL_ACTIONS, WalkthroughControlAction } from './toolRoutingProtocol';
+import { TerminalOrchestrator, TerminalToolResult } from './terminalOrchestrator';
+import { TERMINAL_CONTROL_ACTIONS, TerminalControlAction } from './terminalProtocol';
 import {
 	CALL_HIERARCHY_CONTROL_ACTIONS,
 	CALL_HIERARCHY_DIRECTIONS,
@@ -34,6 +36,10 @@ interface CdeToolArguments {
 	readonly query?: string;
 	readonly question?: string;
 	readonly request?: string;
+	readonly command?: string;
+	readonly session?: string;
+	readonly cwd?: string;
+	readonly input?: string;
 	readonly symbol?: string;
 	readonly file?: string;
 	readonly placement?: EditorPlacement;
@@ -41,8 +47,10 @@ interface CdeToolArguments {
 	readonly referenceAction?: ReferenceControlAction;
 	readonly callHierarchyAction?: CallHierarchyControlAction;
 	readonly walkthroughAction?: WalkthroughControlAction;
+	readonly terminalAction?: TerminalControlAction;
 	readonly direction?: CallHierarchyDirection;
 	readonly occurrence?: number;
+	readonly submit?: boolean;
 }
 
 type WebviewMessage =
@@ -85,6 +93,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 		private readonly codeGeneration: CodeGenerationController,
 		private readonly toolRouter: HaikuToolRouter,
 		private readonly walkthrough: WalkthroughController,
+		private readonly terminal: TerminalOrchestrator,
 	) { }
 
 	resolveWebviewView(view: vscode.WebviewView): void {
@@ -214,7 +223,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 
 	private async executeTool(message: Extract<WebviewMessage, { type: 'executeTool' }>): Promise<void> {
 		this.trace(`tool.call ${message.name} ${message.arguments}`);
-		let result: NavigationToolResult | CodeQaToolResult | CodeGenerationToolResult;
+		let result: NavigationToolResult | CodeQaToolResult | CodeGenerationToolResult | TerminalToolResult;
 		const argumentsValue = isCdeToolName(message.name) ? parseCdeToolArguments(message.name, message.arguments) : undefined;
 		if (!isCdeToolName(message.name)) {
 			result = {
@@ -269,6 +278,18 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'implement_change':
 					result = await this.implementChange(argumentsValue.request!, argumentsValue.placement, progress => this.reportCodeGenerationProgress(message, progress));
+					break;
+				case 'run_terminal_command':
+					result = await this.terminal.runCommand(argumentsValue.command!, argumentsValue.session, argumentsValue.cwd);
+					break;
+				case 'control_terminal':
+					result = await this.terminal.control(
+						argumentsValue.terminalAction!,
+						argumentsValue.session,
+						argumentsValue.input,
+						argumentsValue.submit ?? true,
+						argumentsValue.occurrence,
+					);
 					break;
 			}
 		}
@@ -400,8 +421,27 @@ function isCdeToolName(name: string): name is CdeToolName {
 		|| name === 'control_editor'
 		|| name === 'ask_codebase'
 		|| name === 'control_walkthrough'
-		|| name === 'implement_change';
+		|| name === 'implement_change'
+		|| name === 'run_terminal_command'
+		|| name === 'control_terminal';
 }
+
+const CDE_TOOL_ARGUMENT_KEYS: Readonly<Record<CdeToolName, readonly string[]>> = {
+	open_file: ['query', 'placement'],
+	focus_open_file: ['query'],
+	open_symbol: ['query', 'file', 'placement'],
+	show_references: ['symbol', 'file'],
+	control_references: ['action', 'file', 'occurrence'],
+	show_call_hierarchy: ['direction', 'symbol', 'file'],
+	control_call_hierarchy: ['action', 'query', 'file'],
+	go_to_definition: ['symbol', 'file', 'placement'],
+	control_editor: ['action'],
+	ask_codebase: ['question'],
+	control_walkthrough: ['action'],
+	implement_change: ['request', 'placement'],
+	run_terminal_command: ['command', 'session', 'cwd'],
+	control_terminal: ['action', 'session', 'input', 'submit', 'occurrence'],
+};
 
 function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: string): CdeToolArguments | undefined {
 	try {
@@ -410,29 +450,7 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			return undefined;
 		}
 
-		const allowedKeys = toolName === 'open_file'
-			? ['query', 'placement']
-			: toolName === 'focus_open_file'
-				? ['query']
-			: toolName === 'open_symbol'
-				? ['query', 'file', 'placement']
-				: toolName === 'show_references'
-					? ['symbol', 'file']
-					: toolName === 'control_references'
-						? ['action', 'file', 'occurrence']
-					: toolName === 'show_call_hierarchy'
-						? ['direction', 'symbol', 'file']
-						: toolName === 'control_call_hierarchy'
-							? ['action', 'query', 'file']
-						: toolName === 'go_to_definition'
-							? ['symbol', 'file', 'placement']
-							: toolName === 'control_editor'
-								? ['action']
-								: toolName === 'ask_codebase'
-									? ['question']
-									: toolName === 'control_walkthrough'
-										? ['action']
-									: ['request', 'placement'];
+		const allowedKeys = CDE_TOOL_ARGUMENT_KEYS[toolName];
 		if (Object.keys(value).some(key => !allowedKeys.includes(key))) {
 			return undefined;
 		}
@@ -440,6 +458,12 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 		for (const [key, candidate] of Object.entries(value)) {
 			if (key === 'occurrence') {
 				if (!Number.isInteger(candidate) || (candidate as number) < 1) {
+					return undefined;
+				}
+				continue;
+			}
+			if (key === 'submit') {
+				if (typeof candidate !== 'boolean') {
 					return undefined;
 				}
 				continue;
@@ -455,6 +479,9 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			return undefined;
 		}
 		if (toolName === 'implement_change' && typeof value.request !== 'string') {
+			return undefined;
+		}
+		if (toolName === 'run_terminal_command' && typeof value.command !== 'string') {
 			return undefined;
 		}
 		if (typeof value.placement === 'string' && !EDITOR_PLACEMENTS.includes(value.placement as EditorPlacement)) {
@@ -482,6 +509,10 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			&& (typeof value.action !== 'string' || !WALKTHROUGH_CONTROL_ACTIONS.includes(value.action as WalkthroughControlAction))) {
 			return undefined;
 		}
+		if (toolName === 'control_terminal'
+			&& (typeof value.action !== 'string' || !TERMINAL_CONTROL_ACTIONS.includes(value.action as TerminalControlAction))) {
+			return undefined;
+		}
 		if (toolName === 'show_call_hierarchy'
 			&& (typeof value.direction !== 'string' || !CALL_HIERARCHY_DIRECTIONS.includes(value.direction as CallHierarchyDirection))) {
 			return undefined;
@@ -491,6 +522,10 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			query: typeof value.query === 'string' ? value.query.trim() : undefined,
 			question: typeof value.question === 'string' ? value.question.trim() : undefined,
 			request: typeof value.request === 'string' ? value.request.trim() : undefined,
+			command: typeof value.command === 'string' ? value.command.trim() : undefined,
+			session: typeof value.session === 'string' ? value.session.trim() : undefined,
+			cwd: typeof value.cwd === 'string' ? value.cwd.trim() : undefined,
+			input: typeof value.input === 'string' ? value.input.trim() : undefined,
 			symbol: typeof value.symbol === 'string' ? value.symbol.trim() : undefined,
 			file: typeof value.file === 'string' ? value.file.trim() : undefined,
 			placement: typeof value.placement === 'string' ? value.placement as EditorPlacement : undefined,
@@ -498,8 +533,10 @@ function parseCdeToolArguments(toolName: CdeToolName, serializedArguments: strin
 			referenceAction: toolName === 'control_references' && typeof value.action === 'string' ? value.action as ReferenceControlAction : undefined,
 			callHierarchyAction: toolName === 'control_call_hierarchy' && typeof value.action === 'string' ? value.action as CallHierarchyControlAction : undefined,
 			walkthroughAction: toolName === 'control_walkthrough' && typeof value.action === 'string' ? value.action as WalkthroughControlAction : undefined,
+			terminalAction: toolName === 'control_terminal' && typeof value.action === 'string' ? value.action as TerminalControlAction : undefined,
 			direction: typeof value.direction === 'string' ? value.direction as CallHierarchyDirection : undefined,
 			occurrence: typeof value.occurrence === 'number' ? value.occurrence : undefined,
+			submit: typeof value.submit === 'boolean' ? value.submit : undefined,
 		};
 	} catch {
 		return undefined;
@@ -555,7 +592,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	const codeGeneration = new CodeGenerationController(message => output.appendLine(`${new Date().toISOString()} ${message}`));
 	const toolRouter = new HaikuToolRouter(message => output.appendLine(`${new Date().toISOString()} ${message}`));
 	const walkthrough = new WalkthroughController(highlight);
-	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter, walkthrough);
+	const terminal = new TerminalOrchestrator(message => output.appendLine(`${new Date().toISOString()} ${message}`));
+	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter, walkthrough, terminal);
 	const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	status.name = vscode.l10n.t('CDE Spike');
 	status.text = '$(mic) CDE Spike';
@@ -566,6 +604,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(
 		output,
 		highlight,
+		terminal,
 		status,
 		vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
 			webviewOptions: { retainContextWhenHidden: true },

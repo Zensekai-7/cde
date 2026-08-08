@@ -103,3 +103,33 @@ test('rejects an invalid Haiku tool call', () => {
 		}],
 	}), undefined);
 });
+
+test('parses managed terminal tool calls', () => {
+	assert.deepStrictEqual(parseHaikuToolRoute({
+		content: [{
+			type: 'tool_use',
+			name: 'run_terminal_command',
+			input: { command: 'npm test', session: 'tests' },
+		}],
+	}), {
+		type: 'tool',
+		dispatch: {
+			name: 'run_terminal_command',
+			arguments: '{"command":"npm test","session":"tests"}',
+		},
+	});
+
+	assert.deepStrictEqual(parseHaikuToolRoute({
+		content: [{
+			type: 'tool_use',
+			name: 'control_terminal',
+			input: { action: 'send_input', session: 'server', input: 'rs', submit: false },
+		}],
+	}), {
+		type: 'tool',
+		dispatch: {
+			name: 'control_terminal',
+			arguments: '{"action":"send_input","session":"server","input":"rs","submit":false}',
+		},
+	});
+});
