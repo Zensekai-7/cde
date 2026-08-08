@@ -35,6 +35,7 @@ interface BackgroundJob {
 	result?: CodeGenerationToolResult;
 	error?: string;
 	abortController?: AbortController;
+	cancelRequested: boolean;
 	discardRequested: boolean;
 }
 
@@ -109,6 +110,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 				status: 'queued',
 				progress: 'Waiting to start…',
 				changedFiles: [],
+				cancelRequested: false,
 				discardRequested: false,
 			};
 			this.jobs.set(id, job);
@@ -180,8 +182,10 @@ export class BackgroundJobManager implements vscode.Disposable {
 			job.baseCommit = (await runGit(['rev-parse', 'HEAD'], job.repositoryRoot)).stdout.trim();
 			job.worktreePath = vscode.Uri.joinPath(job.storageUri, 'worktree').fsPath;
 			await runGit(['worktree', 'add', '--detach', job.worktreePath, job.baseCommit], job.repositoryRoot);
-			if (job.discardRequested) {
-				job.status = 'discarded';
+			if (job.discardRequested || job.cancelRequested) {
+				job.status = job.discardRequested ? 'discarded' : 'cancelled';
+				job.completedAt = Date.now();
+				job.progress = job.discardRequested ? 'Discarded.' : 'Cancelled.';
 				return;
 			}
 
@@ -207,7 +211,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 			job.completedAt = Date.now();
 			if (job.discardRequested) {
 				job.status = 'discarded';
-			} else if (job.abortController.signal.aborted) {
+			} else if (job.cancelRequested || job.abortController.signal.aborted) {
 				job.status = 'cancelled';
 			} else if (job.result.ok) {
 				job.status = 'completed';
@@ -222,14 +226,14 @@ export class BackgroundJobManager implements vscode.Disposable {
 			this.trace(`background-job.finish id=${job.id} status=${job.status} files=${job.changedFiles.join(',') || 'none'}`);
 		} catch (error) {
 			job.completedAt = Date.now();
-			job.status = job.discardRequested ? 'discarded' : job.abortController?.signal.aborted ? 'cancelled' : 'failed';
+			job.status = job.discardRequested ? 'discarded' : job.cancelRequested || job.abortController?.signal.aborted ? 'cancelled' : 'failed';
 			job.error = errorMessage(error);
 			job.progress = job.error;
 			this.trace(`background-job.error id=${job.id} error=${job.error}`);
 		} finally {
 			job.abortController = undefined;
 			this.emit(job);
-			if (job.status === 'discarded') {
+			if (job.status === 'discarded' || job.status === 'cancelled') {
 				await this.removeWorktree(job);
 			}
 		}
@@ -281,8 +285,8 @@ export class BackgroundJobManager implements vscode.Disposable {
 		const file = selectChangedFile(job, fileQuery);
 		const baseUri = vscode.Uri.joinPath(job.storageUri, 'diff', 'base', ...file.split('/'));
 		const resultUri = vscode.Uri.joinPath(job.storageUri, 'diff', 'result', ...file.split('/'));
-		await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(baseUri, '..'));
-		await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(resultUri, '..'));
+		await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(baseUri.fsPath)));
+		await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(resultUri.fsPath)));
 		const base = await gitFileAt(job.repositoryRoot, job.baseCommit, file);
 		const result = await readFileOrEmpty(vscode.Uri.file(path.join(job.worktreePath, file)));
 		await vscode.workspace.fs.writeFile(baseUri, base);
@@ -343,6 +347,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 			job.progress = 'Cancelled before starting.';
 			this.emit(job);
 		} else if (job.status === 'preparing' || job.status === 'running') {
+			job.cancelRequested = true;
 			job.abortController?.abort();
 			job.progress = 'Cancelling…';
 			this.emit(job);
