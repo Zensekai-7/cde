@@ -36,7 +36,7 @@
       "activitybar": [
         {
           "id": "cde",
-          "icon": "$(mic-filled)",
+          "icon": "media/cde-voice.svg",
           "title": "%container.title%"
         }
       ]
@@ -58,7 +58,7 @@
         "icon": "$(mic-filled)"
       },
       {
-        "command": "cde.applyCdeObsidianSkin",
+        "command": "cde.applyTuffSkin",
         "title": "%command.applySkin%",
         "category": "%command.category%"
       }

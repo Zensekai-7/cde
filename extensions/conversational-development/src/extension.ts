@@ -34,6 +34,7 @@ import { WalkthroughController } from './walkthrough';
 
 const VIEW_ID = 'cde.conversation';
 const SDP_EXCHANGE_TIMEOUT_MS = 15_000;
+const VOICE_VIEW_OPENED_KEY = 'cde.voiceViewOpened';
 
 interface CdeToolArguments {
 	readonly query?: string;
@@ -633,10 +634,14 @@ export function activate(context: vscode.ExtensionContext): void {
 	const terminal = new TerminalOrchestrator(trace);
 	const terminalInterpreter = new TerminalResultInterpreter(trace);
 	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter, conversation, walkthrough, terminal, terminalInterpreter);
-	const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-	status.name = vscode.l10n.t('CDE Spike');
-	status.text = '$(mic) CDE Spike';
-	status.tooltip = vscode.l10n.t('Open the CDE voice-to-IDE experiment');
+	const openConversation = async (): Promise<void> => {
+		await vscode.commands.executeCommand('workbench.view.extension.cde');
+		await context.globalState.update(VOICE_VIEW_OPENED_KEY, true);
+	};
+	const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+	status.name = vscode.l10n.t('CDE Voice');
+	status.text = '$(mic-filled) Start CDE Voice';
+	status.tooltip = vscode.l10n.t('Start a voice conversation with CDE');
 	status.command = 'cde.openConversation';
 	status.show();
 
@@ -649,10 +654,13 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
 			webviewOptions: { retainContextWhenHidden: true },
 		}),
-		vscode.commands.registerCommand('cde.openConversation', () => vscode.commands.executeCommand('workbench.view.extension.cde')),
-		vscode.commands.registerCommand('cde.applyCdeObsidianSkin', async () => {
-			await vscode.workspace.getConfiguration('workbench').update('colorTheme', 'CDE Obsidian', vscode.ConfigurationTarget.Global);
-			void vscode.window.showInformationMessage(vscode.l10n.t('Applied the CDE Obsidian skin.'));
+		vscode.commands.registerCommand('cde.openConversation', openConversation),
+		vscode.commands.registerCommand('cde.applyTuffSkin', async () => {
+			await vscode.workspace.getConfiguration('workbench').update('colorTheme', 'TUFF', vscode.ConfigurationTarget.Global);
+			void vscode.window.showInformationMessage(vscode.l10n.t('TUFF skin applied.'));
 		}),
 	);
+	if (!context.globalState.get<boolean>(VOICE_VIEW_OPENED_KEY)) {
+		void openConversation();
+	}
 }

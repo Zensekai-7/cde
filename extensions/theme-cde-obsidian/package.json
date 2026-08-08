@@ -12,7 +12,7 @@
 	"contributes": {
 		"themes": [
 			{
-				"id": "CDE Obsidian",
+				"id": "TUFF",
 				"label": "%themeLabel%",
 				"uiTheme": "vs-dark",
 				"path": "./themes/cde-obsidian-color-theme.json"
