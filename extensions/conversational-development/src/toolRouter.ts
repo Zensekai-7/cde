@@ -137,6 +137,7 @@ const TOOLS: readonly AnthropicTool[] = [
 		description: 'Repository inquiry only: inspect the current repository with Haiku and answer a grounded code question using live editor context. Do not use for navigation or requested edits.',
 		input_schema: objectSchema({
 			question: stringProperty('The complete repository question in the user\'s own words.'),
+			placement: enumProperty(EDITOR_PLACEMENTS, 'Where the narrated walkthrough should appear. Omit to reuse the currently focused editor; set only when the user explicitly requests a split or direction.'),
 		}, ['question']),
 		strict: true,
 	},

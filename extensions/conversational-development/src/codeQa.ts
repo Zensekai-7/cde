@@ -9,12 +9,14 @@ import * as vscode from 'vscode';
 import { getAnthropicApiKey } from './apiKeys';
 import { ConversationContext } from './conversationContext';
 import { buildCodeQaPrompt, CODE_QA_OUTPUT_SCHEMA, CodeQaAnswer, CodeQaContext, parseCodeQaAnswer } from './codeQaProtocol';
+import type { EditorPlacement } from './navigation';
 
 const CODE_QA_TIMEOUT_MS = 60_000;
 const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'] as const;
 
 export interface CodeQaToolResult extends CodeQaAnswer {
 	readonly ok: boolean;
+	readonly walkthrough_placement?: EditorPlacement;
 	readonly error?: string;
 }
 

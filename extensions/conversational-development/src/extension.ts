@@ -58,7 +58,7 @@ type WebviewMessage =
 	| { readonly type: 'exchangeSdp'; readonly requestId: string; readonly sdp: string }
 	| { readonly type: 'routeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly transcript: string; readonly walkthroughActive: boolean }
 	| { readonly type: 'executeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly callId: string; readonly conversationTurnId: number; readonly name: string; readonly arguments: string }
-	| { readonly type: 'revealWalkthroughStep'; readonly requestId: string; readonly sessionEpoch: number; readonly walkthroughId: string; readonly stepIndex: number; readonly step: CodeQaWalkthroughStep }
+	| { readonly type: 'revealWalkthroughStep'; readonly requestId: string; readonly sessionEpoch: number; readonly walkthroughId: string; readonly stepIndex: number; readonly step: CodeQaWalkthroughStep; readonly placement?: EditorPlacement }
 	| { readonly type: 'resetWalkthrough' }
 	| { readonly type: 'openCheckoutDirectly'; readonly requestId: string };
 
@@ -121,7 +121,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 				await this.executeTool(message);
 				return;
 			case 'revealWalkthroughStep': {
-				const result = await this.walkthrough.reveal(message.step);
+				const result = await this.walkthrough.reveal(message.step, message.placement);
 				this.trace(`walkthrough.reveal index=${message.stepIndex} ${JSON.stringify(result)}`);
 				await this.post({
 					type: 'walkthroughStepReady',
@@ -280,7 +280,10 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 					result = await this.navigation.controlEditor(argumentsValue.action!);
 					break;
 				case 'ask_codebase':
-					result = await this.codeQa.ask(argumentsValue.question!, this.conversation.getContext());
+					result = {
+						...await this.codeQa.ask(argumentsValue.question!, this.conversation.getContext()),
+						walkthrough_placement: argumentsValue.placement ?? 'current',
+					};
 					break;
 				case 'control_walkthrough':
 					result = {
@@ -449,7 +452,7 @@ const CDE_TOOL_ARGUMENT_KEYS: Readonly<Record<CdeToolName, readonly string[]>> =
 	control_call_hierarchy: ['action', 'query', 'file'],
 	go_to_definition: ['symbol', 'file', 'placement'],
 	control_editor: ['action'],
-	ask_codebase: ['question'],
+	ask_codebase: ['question', 'placement'],
 	control_walkthrough: ['action'],
 	implement_change: ['request', 'placement'],
 	run_terminal_command: ['command', 'session', 'cwd'],

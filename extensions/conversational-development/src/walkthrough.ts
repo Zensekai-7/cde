@@ -5,6 +5,7 @@
 
 import * as vscode from 'vscode';
 import { CodeQaWalkthroughStep } from './codeQaProtocol';
+import type { EditorPlacement } from './navigation';
 
 export interface WalkthroughRevealResult {
 	readonly ok: boolean;
@@ -20,7 +21,7 @@ export class WalkthroughController {
 
 	constructor(private readonly highlight: vscode.TextEditorDecorationType) { }
 
-	async reveal(step: CodeQaWalkthroughStep): Promise<WalkthroughRevealResult> {
+	async reveal(step: CodeQaWalkthroughStep, placement: EditorPlacement = 'current'): Promise<WalkthroughRevealResult> {
 		try {
 			const uri = await this.resolveWorkspaceFile(step.path);
 			const document = await vscode.workspace.openTextDocument(uri);
@@ -31,7 +32,7 @@ export class WalkthroughController {
 				preview: true,
 				preserveFocus: false,
 				selection: range,
-				viewColumn: this.walkthroughColumn ?? vscode.ViewColumn.Beside,
+				viewColumn: this.walkthroughColumn ?? await this.resolveViewColumn(placement),
 			});
 			this.walkthroughColumn = editor.viewColumn;
 			editor.selection = new vscode.Selection(range.start, range.end);
@@ -112,6 +113,37 @@ export class WalkthroughController {
 		}
 		const offset = document.getText().indexOf(symbol);
 		return offset >= 0 ? document.positionAt(offset).line : -1;
+	}
+
+	private async resolveViewColumn(placement: EditorPlacement): Promise<vscode.ViewColumn> {
+		if (placement === 'current') {
+			return vscode.ViewColumn.Active;
+		}
+		if (placement === 'beside') {
+			return vscode.ViewColumn.Beside;
+		}
+
+		const activeGroup = vscode.window.tabGroups.activeTabGroup;
+		const groups = vscode.window.tabGroups.all;
+		if (placement === 'left') {
+			const leftGroup = groups
+				.filter(group => group.viewColumn < activeGroup.viewColumn)
+				.sort((left, right) => right.viewColumn - left.viewColumn)[0];
+			if (leftGroup) {
+				return leftGroup.viewColumn;
+			}
+			await vscode.commands.executeCommand('workbench.action.splitEditorLeft');
+			return vscode.ViewColumn.Active;
+		}
+		if (placement === 'right') {
+			const rightGroup = groups
+				.filter(group => group.viewColumn > activeGroup.viewColumn)
+				.sort((left, right) => left.viewColumn - right.viewColumn)[0];
+			return rightGroup?.viewColumn ?? vscode.ViewColumn.Beside;
+		}
+
+		await vscode.commands.executeCommand('workbench.action.splitEditorDown');
+		return vscode.ViewColumn.Active;
 	}
 
 	private clearHighlights(): void {

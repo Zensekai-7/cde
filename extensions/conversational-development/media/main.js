@@ -275,6 +275,7 @@
 		activeWalkthrough = {
 			id: `${message.sessionEpoch}-${message.callId}`,
 			steps: message.result.walkthrough,
+			placement: message.result.walkthrough_placement || 'current',
 			fallback: message.result.spoken_response,
 			display: message.result.display_response,
 			index: -1,
@@ -308,6 +309,7 @@
 			walkthroughId: activeWalkthrough.id,
 			stepIndex: activeWalkthrough.index,
 			step: activeWalkthrough.steps[activeWalkthrough.index],
+			placement: activeWalkthrough.placement,
 		});
 	}
 
