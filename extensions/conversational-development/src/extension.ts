@@ -13,6 +13,7 @@ import { ConversationContextStore } from './conversationContext';
 import { SemanticToolRouter, ToolRoutingContext } from './toolRouter';
 import { CdeToolName, WALKTHROUGH_CONTROL_ACTIONS, WalkthroughControlAction } from './toolRoutingProtocol';
 import { TerminalOrchestrator, TerminalToolResult } from './terminalOrchestrator';
+import { TerminalResultInterpreter } from './terminalInference';
 import { TERMINAL_CONTROL_ACTIONS, TerminalControlAction } from './terminalProtocol';
 import {
 	CALL_HIERARCHY_CONTROL_ACTIONS,
@@ -95,6 +96,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 		private readonly conversation: ConversationContextStore,
 		private readonly walkthrough: WalkthroughController,
 		private readonly terminal: TerminalOrchestrator,
+		private readonly terminalInterpreter: TerminalResultInterpreter,
 	) { }
 
 	resolveWebviewView(view: vscode.WebviewView): void {
@@ -289,15 +291,21 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 					result = await this.implementChange(argumentsValue.request!, argumentsValue.placement, progress => this.reportCodeGenerationProgress(message, progress));
 					break;
 				case 'run_terminal_command':
-					result = await this.terminal.runCommand(argumentsValue.command!, argumentsValue.session, argumentsValue.cwd);
+					result = await this.interpretTerminalResult(
+						message.conversationTurnId,
+						await this.terminal.runCommand(argumentsValue.command!, argumentsValue.session, argumentsValue.cwd),
+					);
 					break;
 				case 'control_terminal':
-					result = await this.terminal.control(
-						argumentsValue.terminalAction!,
-						argumentsValue.session,
-						argumentsValue.input,
-						argumentsValue.submit ?? true,
-						argumentsValue.occurrence,
+					result = await this.interpretTerminalResult(
+						message.conversationTurnId,
+						await this.terminal.control(
+							argumentsValue.terminalAction!,
+							argumentsValue.session,
+							argumentsValue.input,
+							argumentsValue.submit ?? true,
+							argumentsValue.occurrence,
+						),
 					);
 					break;
 			}
@@ -312,6 +320,23 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 			callId: message.callId,
 			result,
 		});
+	}
+
+	private async interpretTerminalResult(conversationTurnId: number, result: TerminalToolResult): Promise<TerminalToolResult> {
+		const originalRequest = this.conversation.getRequest(conversationTurnId) ?? 'Interpret this terminal result.';
+		try {
+			return {
+				...result,
+				...await this.terminalInterpreter.interpret(originalRequest, result),
+			};
+		} catch (error) {
+			this.trace(`terminal.inference.error ${formatError(error)}`);
+			return {
+				...result,
+				spoken_response: 'The terminal action completed, but I could not interpret its output.',
+				display_response: result.output_tail || result.error || 'No terminal output was captured.',
+			};
+		}
 	}
 
 	private async implementChange(request: string, placement: EditorPlacement | undefined, reportProgress: (progress: CodeGenerationProgress) => void): Promise<CodeGenerationToolResult> {
@@ -602,7 +627,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	const conversation = new ConversationContextStore();
 	const walkthrough = new WalkthroughController(highlight);
 	const terminal = new TerminalOrchestrator(message => output.appendLine(`${new Date().toISOString()} ${message}`));
-	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter, conversation, walkthrough, terminal);
+	const terminalInterpreter = new TerminalResultInterpreter(message => output.appendLine(`${new Date().toISOString()} ${message}`));
+	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter, conversation, walkthrough, terminal, terminalInterpreter);
 	const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	status.name = vscode.l10n.t('CDE Spike');
 	status.text = '$(mic) CDE Spike';

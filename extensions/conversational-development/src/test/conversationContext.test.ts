@@ -29,6 +29,7 @@ test('keeps prior requests, outcomes, and changed files as CDE context', () => {
 		visibleFiles: ['src/checkout.ts'],
 	});
 	context.recordAction(secondTurn, 'implement_change', '{"request":"Now make another one that chooses based on a binary input."}');
+	assert.strictEqual(context.getRequest(secondTurn), 'Now make another one that chooses based on a binary input.');
 
 	const formatted = formatConversationContext(context.getContext());
 	assert.match(formatted, /Add calculateFinalPrice to checkout/);

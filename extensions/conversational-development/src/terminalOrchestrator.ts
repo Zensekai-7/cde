@@ -59,6 +59,7 @@ export interface TerminalToolResult {
 	readonly line?: number;
 	readonly sessions?: readonly TerminalSessionView[];
 	readonly spoken_response: string;
+	readonly display_response?: string;
 	readonly error?: string;
 }
 

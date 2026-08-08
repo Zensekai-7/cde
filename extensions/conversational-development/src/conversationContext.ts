@@ -96,6 +96,10 @@ export class ConversationContextStore {
 		};
 	}
 
+	getRequest(turnId: number): string | undefined {
+		return this.findTurn(turnId)?.request;
+	}
+
 	private findTurn(turnId: number): MutableConversationTurn | undefined {
 		return this.turns.find(turn => turn.id === turnId);
 	}

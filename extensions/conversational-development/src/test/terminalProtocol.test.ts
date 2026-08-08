@@ -5,6 +5,7 @@
 
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { buildTerminalInferencePrompt, parseTerminalInterpretation } from '../terminalInferenceProtocol';
 import { appendTerminalOutput, findTerminalOutputLocations, normalizeTerminalSessionName, terminalOutputExcerpt, terminalOutputTail } from '../terminalProtocol';
 
 test('normalizes conversational terminal names', () => {
@@ -40,4 +41,37 @@ src/checkout.ts:6:2
 		{ path: '/workspace/src/checkout.ts', line: 6, column: 2 },
 		{ path: 'tests/checkout.test.ts', line: 18, column: 9 },
 	]);
+});
+
+test('grounds terminal inference in the original request and structured evidence', () => {
+	const prompt = buildTerminalInferencePrompt('Did the tests pass?', {
+		ok: true,
+		session: 'tests',
+		status: 'failed',
+		exit_code: 1,
+		output_tail: 'tests/checkout.test.mjs:12:1\n1 failed',
+		location_count: 1,
+		spoken_response: 'raw output that should not be forwarded',
+	});
+
+	assert.match(prompt, /Did the tests pass\?/);
+	assert.match(prompt, /"status": "failed"/);
+	assert.match(prompt, /tests\/checkout\.test\.mjs:12:1/);
+	assert.doesNotMatch(prompt, /raw output that should not be forwarded/);
+});
+
+test('parses a model-interpreted terminal result', () => {
+	assert.deepEqual(parseTerminalInterpretation({
+		content: [{
+			type: 'tool_use',
+			name: 'report_terminal_result',
+			input: {
+				spoken_response: 'One checkout test failed.',
+				display_response: '1 failed in tests/checkout.test.mjs:12.',
+			},
+		}],
+	}), {
+		spoken_response: 'One checkout test failed.',
+		display_response: '1 failed in tests/checkout.test.mjs:12.',
+	});
 });
