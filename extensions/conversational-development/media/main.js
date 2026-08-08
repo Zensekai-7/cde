@@ -4,7 +4,6 @@
 	const vscode = acquireVsCodeApi();
 	const connectButton = document.getElementById('connect');
 	const muteButton = document.getElementById('mute');
-	const directButton = document.getElementById('direct');
 	const textForm = document.getElementById('textForm');
 	const textInput = document.getElementById('textInput');
 	const stateText = document.getElementById('state');
@@ -895,10 +894,6 @@
 			case 'walkthroughStepReady':
 				handleWalkthroughStepReady(message);
 				break;
-			case 'directResult':
-				assistantText.textContent = message.result.spoken_response;
-				log('direct.result', JSON.stringify(message.result));
-				break;
 		}
 	});
 
@@ -920,11 +915,6 @@
 	walkthroughRepeatButton.addEventListener('click', () => handleWalkthroughControl('{"action":"repeat"}'));
 	walkthroughNextButton.addEventListener('click', () => handleWalkthroughControl('{"action":"next"}'));
 	walkthroughStopButton.addEventListener('click', () => handleWalkthroughControl('{"action":"stop"}'));
-	directButton.addEventListener('click', () => {
-		const requestId = nextId('direct');
-		log('direct.request');
-		vscode.postMessage({ type: 'openCheckoutDirectly', requestId });
-	});
 	textForm.addEventListener('submit', event => {
 		event.preventDefault();
 		const text = textInput.value.trim();

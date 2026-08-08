@@ -54,11 +54,6 @@
         "title": "%command.open%",
         "category": "%command.category%",
         "icon": "$(mic-filled)"
-      },
-      {
-        "command": "cde.openCheckoutDirectly",
-        "title": "%command.openCheckout%",
-        "category": "%command.category%"
       }
     ],
     "configuration": {

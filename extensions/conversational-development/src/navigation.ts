@@ -491,10 +491,6 @@ export class NavigationController {
 		}
 	}
 
-	openPreparedCheckout(): Promise<NavigationToolResult> {
-		return this.openSymbol('calculateFinalPrice', 'src/checkout.ts');
-	}
-
 	private async selectReferenceFile(fileQuery: string, occurrence: number): Promise<NavigationToolResult> {
 		const candidates = this.lastReferences.map(location => ({
 			path: vscode.workspace.asRelativePath(location.uri),

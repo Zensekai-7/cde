@@ -59,8 +59,7 @@ type WebviewMessage =
 	| { readonly type: 'routeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly transcript: string; readonly walkthroughActive: boolean }
 	| { readonly type: 'executeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly callId: string; readonly conversationTurnId: number; readonly name: string; readonly arguments: string }
 	| { readonly type: 'revealWalkthroughStep'; readonly requestId: string; readonly sessionEpoch: number; readonly walkthroughId: string; readonly stepIndex: number; readonly step: CodeQaWalkthroughStep; readonly placement?: EditorPlacement }
-	| { readonly type: 'resetWalkthrough' }
-	| { readonly type: 'openCheckoutDirectly'; readonly requestId: string };
+	| { readonly type: 'resetWalkthrough' };
 
 const realtimeSession = {
 	type: 'realtime',
@@ -136,12 +135,6 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 			case 'resetWalkthrough':
 				this.walkthrough.reset();
 				return;
-			case 'openCheckoutDirectly': {
-				const result = await this.navigation.openPreparedCheckout();
-				this.trace(`direct.result ${JSON.stringify(result)}`);
-				await this.post({ type: 'directResult', requestId: message.requestId, result });
-				return;
-			}
 		}
 	}
 
@@ -414,7 +407,6 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 		</form>
 		<details>
 			<summary>Architecture checks</summary>
-			<button id="direct" class="secondary">Test IDE bridge</button>
 			<pre id="events"></pre>
 		</details>
 	</main>
@@ -627,6 +619,5 @@ export function activate(context: vscode.ExtensionContext): void {
 			webviewOptions: { retainContextWhenHidden: true },
 		}),
 		vscode.commands.registerCommand('cde.openConversation', () => vscode.commands.executeCommand('workbench.view.extension.cde')),
-		vscode.commands.registerCommand('cde.openCheckoutDirectly', () => navigation.openPreparedCheckout()),
 	);
 }
