@@ -7,6 +7,7 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import * as vscode from 'vscode';
 import { getAnthropicApiKey } from './apiKeys';
+import { ConversationContext } from './conversationContext';
 import { buildCodeGenerationPrompt, CODE_GENERATION_OUTPUT_SCHEMA, CodeGenerationAnswer, CodeGenerationContext, CodeGenerationProgress, CodeGenerationStreamDecoder, parseCodeGenerationAnswer } from './codeGenerationProtocol';
 
 const CODE_GENERATION_TIMEOUT_MS = 120_000;
@@ -73,7 +74,7 @@ const nativeImport = new Function('specifier', 'return import(specifier);') as N
 export class CodeGenerationController {
 	constructor(private readonly trace: (message: string) => void) { }
 
-	async implement(request: string, reportProgress: (progress: CodeGenerationProgress) => void): Promise<CodeGenerationToolResult> {
+	async implement(request: string, reportProgress: (progress: CodeGenerationProgress) => void, conversation?: ConversationContext): Promise<CodeGenerationToolResult> {
 		const apiKey = getAnthropicApiKey();
 		if (!apiKey) {
 			return failure('Claude is not configured in this CDE launch.', 'Set cde.anthropicApiKey or ANTHROPIC_API_KEY.');
@@ -87,7 +88,7 @@ export class CodeGenerationController {
 			return failure('Open a workspace before asking me to change code.', 'No workspace folder is open.');
 		}
 
-		const context = captureEditorContext(workspaceRoot, request);
+		const context = captureEditorContext(workspaceRoot, request, conversation);
 		const abortController = new AbortController();
 		const timeout = setTimeout(() => abortController.abort(), CODE_GENERATION_TIMEOUT_MS);
 		this.trace(`code-generation.start workspace=${workspaceRoot.fsPath} active=${context.activeFile ?? 'none'}`);
@@ -169,7 +170,7 @@ function createQueryOptions(workspaceRoot: string, abortController: AbortControl
 	};
 }
 
-function captureEditorContext(workspaceRoot: vscode.Uri, request: string): CodeGenerationContext {
+function captureEditorContext(workspaceRoot: vscode.Uri, request: string, conversation: ConversationContext | undefined): CodeGenerationContext {
 	const activeEditor = vscode.window.activeTextEditor;
 	const activeFile = activeEditor && activeEditor.document.uri.scheme === 'file'
 		? relativePath(workspaceRoot.fsPath, activeEditor.document.uri.fsPath)
@@ -188,6 +189,7 @@ function captureEditorContext(workspaceRoot: vscode.Uri, request: string): CodeG
 		activeLine: activeEditor ? activeEditor.selection.active.line + 1 : undefined,
 		selection,
 		visibleFiles,
+		conversation,
 	};
 }
 

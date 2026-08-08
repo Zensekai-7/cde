@@ -5,7 +5,14 @@
 
 import * as assert from 'assert';
 import { test } from 'node:test';
+import { ROUTING_INSTRUCTIONS } from '../toolRoutingInstructions';
 import { parseHaikuToolRoute } from '../toolRoutingProtocol';
+
+test('uses end-state semantics for workspace changes rather than navigation', () => {
+	assert.match(ROUTING_INSTRUCTIONS, /semantic end state that would make the request complete/);
+	assert.match(ROUTING_INSTRUCTIONS, /end state differs from the current workspace, choose implement_change/);
+	assert.match(ROUTING_INSTRUCTIONS, /Never choose navigation merely to locate or inspect a target before changing it/);
+});
 
 test('parses a strict Haiku IDE tool call', () => {
 	assert.deepStrictEqual(parseHaikuToolRoute({

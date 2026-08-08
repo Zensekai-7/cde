@@ -8,7 +8,8 @@ import { getOpenAiApiKey } from './apiKeys';
 import { CodeGenerationController, CodeGenerationToolResult } from './codeGeneration';
 import { CodeGenerationProgress } from './codeGenerationProtocol';
 import { CodeQaController, CodeQaToolResult } from './codeQa';
-import { HaikuToolRouter, ToolRoutingContext } from './toolRouter';
+import { ConversationContextStore } from './conversationContext';
+import { SemanticToolRouter, ToolRoutingContext } from './toolRouter';
 import { CdeToolName } from './toolRoutingProtocol';
 import {
 	CALL_HIERARCHY_DIRECTIONS,
@@ -38,7 +39,7 @@ interface CdeToolArguments {
 type WebviewMessage =
 	| { readonly type: 'exchangeSdp'; readonly requestId: string; readonly sdp: string }
 	| { readonly type: 'routeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly transcript: string }
-	| { readonly type: 'executeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly callId: string; readonly name: string; readonly arguments: string }
+	| { readonly type: 'executeTool'; readonly requestId: string; readonly sessionEpoch: number; readonly callId: string; readonly conversationTurnId: number; readonly name: string; readonly arguments: string }
 	| { readonly type: 'openCheckoutDirectly'; readonly requestId: string };
 
 const realtimeSession = {
@@ -71,7 +72,8 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 		private readonly navigation: NavigationController,
 		private readonly codeQa: CodeQaController,
 		private readonly codeGeneration: CodeGenerationController,
-		private readonly toolRouter: HaikuToolRouter,
+		private readonly toolRouter: SemanticToolRouter,
+		private readonly conversation: ConversationContextStore,
 	) { }
 
 	resolveWebviewView(view: vscode.WebviewView): void {
@@ -106,9 +108,16 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async routeTool(message: Extract<WebviewMessage, { type: 'routeTool' }>): Promise<void> {
+		const editorContext = captureToolRoutingContext();
+		const conversationTurnId = this.conversation.beginTurn(message.transcript, editorContext);
 		try {
-			const route = await this.toolRouter.route(message.transcript, captureToolRoutingContext());
+			const route = await this.toolRouter.route(message.transcript, {
+				...editorContext,
+				conversation: this.conversation.getContext(),
+			});
 			if (route.type === 'response') {
+				this.conversation.recordAction(conversationTurnId, 'respond_to_user');
+				this.conversation.recordOutcome(conversationTurnId, { ok: true, spoken_response: route.spokenResponse });
 				await this.post({
 					type: 'routeResponse',
 					requestId: message.requestId,
@@ -117,16 +126,20 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 				});
 				return;
 			}
+			this.conversation.recordAction(conversationTurnId, route.dispatch.name, route.dispatch.arguments);
 			await this.post({
 				type: 'toolRoute',
 				requestId: message.requestId,
 				sessionEpoch: message.sessionEpoch,
+				conversationTurnId,
 				name: route.dispatch.name,
 				arguments: route.dispatch.arguments,
 			});
 		} catch (error) {
 			const detail = formatError(error);
-			this.trace(`haiku.route.error ${detail}`);
+			this.trace(`router.route.error ${detail}`);
+			this.conversation.recordAction(conversationTurnId, 'routing_error');
+			this.conversation.recordOutcome(conversationTurnId, { ok: false, spoken_response: detail });
 			await this.post({
 				type: 'routeError',
 				requestId: message.requestId,
@@ -220,7 +233,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 					result = await this.navigation.controlEditor(argumentsValue.action!);
 					break;
 				case 'ask_codebase':
-					result = await this.codeQa.ask(argumentsValue.question!);
+					result = await this.codeQa.ask(argumentsValue.question!, this.conversation.getContext());
 					break;
 				case 'implement_change':
 					result = await this.implementChange(argumentsValue.request!, argumentsValue.placement, progress => this.reportCodeGenerationProgress(message, progress));
@@ -229,6 +242,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		this.trace(`tool.result ${JSON.stringify(result)}`);
+		this.conversation.recordOutcome(message.conversationTurnId, result);
 		await this.post({
 			type: 'toolResult',
 			requestId: message.requestId,
@@ -239,7 +253,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private async implementChange(request: string, placement: EditorPlacement | undefined, reportProgress: (progress: CodeGenerationProgress) => void): Promise<CodeGenerationToolResult> {
-		const result = await this.codeGeneration.implement(request, reportProgress);
+		const result = await this.codeGeneration.implement(request, reportProgress, this.conversation.getContext());
 		if (!result.ok || !result.primary_file) {
 			return result;
 		}
@@ -265,8 +279,7 @@ class ConversationViewProvider implements vscode.WebviewViewProvider {
 			type: 'codeGenerationProgress',
 			sessionEpoch: message.sessionEpoch,
 			callId: message.callId,
-			kind: progress.kind,
-			text: progress.text,
+			...progress,
 		});
 	}
 
@@ -450,8 +463,9 @@ export function activate(context: vscode.ExtensionContext): void {
 	const navigation = new NavigationController(highlight);
 	const codeQa = new CodeQaController(message => output.appendLine(`${new Date().toISOString()} ${message}`));
 	const codeGeneration = new CodeGenerationController(message => output.appendLine(`${new Date().toISOString()} ${message}`));
-	const toolRouter = new HaikuToolRouter(message => output.appendLine(`${new Date().toISOString()} ${message}`));
-	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter);
+	const toolRouter = new SemanticToolRouter(message => output.appendLine(`${new Date().toISOString()} ${message}`));
+	const conversation = new ConversationContextStore();
+	const provider = new ConversationViewProvider(context.extensionUri, output, navigation, codeQa, codeGeneration, toolRouter, conversation);
 	const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	status.name = vscode.l10n.t('CDE Spike');
 	status.text = '$(mic) CDE Spike';

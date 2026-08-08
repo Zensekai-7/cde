@@ -14,11 +14,22 @@ test('buildCodeGenerationPrompt includes the explicit request and live editor co
 		activeLine: 7,
 		selection: 'return request.subtotalCents - discount;',
 		visibleFiles: ['src/checkout.ts', 'src/cart/cart-summary.ts'],
+		conversation: {
+			recentTurns: [{
+				request: 'Add calculateFinalPrice.',
+				action: 'implement_change',
+				outcome: 'Added calculateFinalPrice in src/checkout.ts.',
+				relatedFiles: ['src/checkout.ts'],
+			}],
+			relatedFiles: ['src/checkout.ts'],
+		},
 	});
 
 	assert.match(prompt, /Clamp the discount percentage/);
 	assert.match(prompt, /src\/checkout\.ts:7/);
 	assert.match(prompt, /return request\.subtotalCents/);
+	assert.match(prompt, /Add calculateFinalPrice/);
+	assert.match(prompt, /another one/);
 	assert.match(prompt, /smallest complete change/);
 });
 
@@ -92,4 +103,43 @@ test('CodeGenerationStreamDecoder exposes live text and workspace tool activity'
 			delta: { type: 'text_delta', text: 'I found the right helper.' },
 		},
 	}), [{ kind: 'text', text: 'I found the right helper.' }]);
+});
+
+test('CodeGenerationStreamDecoder streams an edit replacement as its tool input arrives', () => {
+	const decoder = new CodeGenerationStreamDecoder();
+	decoder.accept({
+		type: 'stream_event',
+		event: {
+			type: 'content_block_start',
+			index: 0,
+			content_block: { type: 'tool_use', name: 'Edit' },
+		},
+	});
+	assert.deepStrictEqual(decoder.accept({
+		type: 'stream_event',
+		event: {
+			type: 'content_block_delta',
+			index: 0,
+			delta: { type: 'input_json_delta', partial_json: '{"file_path":"src/checkout.ts","old_string":"return subtotal;","new_string":"return calculate' },
+		},
+	}), [{
+		kind: 'code',
+		text: 'return calculate',
+		file: 'src/checkout.ts',
+		previousText: 'return subtotal;',
+		toolIndex: 0,
+	}]);
+	assert.deepStrictEqual(decoder.accept({
+		type: 'stream_event',
+		event: {
+			type: 'content_block_delta',
+			index: 0,
+			delta: { type: 'input_json_delta', partial_json: 'FinalPrice();"}' },
+		},
+	}), [{
+		kind: 'code',
+		text: 'FinalPrice();',
+		file: 'src/checkout.ts',
+		toolIndex: 0,
+	}]);
 });

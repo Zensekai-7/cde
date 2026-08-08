@@ -3,12 +3,15 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { ConversationContext, formatConversationContext } from './conversationContext';
+
 export interface CodeQaContext {
 	readonly question: string;
 	readonly activeFile?: string;
 	readonly activeLine?: number;
 	readonly selection?: string;
 	readonly visibleFiles: readonly string[];
+	readonly conversation?: ConversationContext;
 }
 
 export interface CodeQaAnswer {
@@ -43,17 +46,21 @@ export function buildCodeQaPrompt(context: CodeQaContext): string {
 	const selection = context.selection
 		? truncate(context.selection, MAX_SELECTION_CHARS)
 		: 'none';
+	const conversation = formatConversationContext(context.conversation);
 
 	return `Answer this repository question using the read-only code tools before drawing a conclusion.
 
 Question: ${context.question}
+
+Recent CDE conversation:
+${conversation}
 
 Live editor context:
 - Active location: ${activeLocation}
 - Visible files: ${visibleFiles}
 - Selected code:\n${selection}
 
-Ground the answer in the repository, not assumptions. Prefer the live selection when the question says "this", "it", or "here". In display_response, cite every important claim as repository-relative path:line. Keep spoken_response direct and use the fewest words necessary. If the repository does not establish the answer, say what you could not verify.`;
+Ground the answer in the repository, not assumptions. Use the conversation to resolve follow-ups such as "that", "this", and "the change you just made". Prefer the live selection when the question says "this", "it", or "here". The current question and live editor context take precedence when they conflict. In display_response, cite every important claim as repository-relative path:line. Keep spoken_response direct and use the fewest words necessary. If the repository does not establish the answer, say what you could not verify.`;
 }
 
 export function parseCodeQaAnswer(structuredOutput: unknown, fallback: string): CodeQaAnswer | undefined {

@@ -14,11 +14,22 @@ test('buildCodeQaPrompt includes live editor context and the repository question
 		activeLine: 7,
 		selection: 'return subtotal - discount;',
 		visibleFiles: ['src/checkout.ts', 'src/cart.ts'],
+		conversation: {
+			recentTurns: [{
+				request: 'Add a discount helper.',
+				action: 'implement_change',
+				outcome: 'Added the helper in src/checkout.ts.',
+				relatedFiles: ['src/checkout.ts'],
+			}],
+			relatedFiles: ['src/checkout.ts'],
+		},
 	});
 
 	assert.match(prompt, /Why can this become negative\?/);
 	assert.match(prompt, /src\/checkout\.ts:7/);
 	assert.match(prompt, /return subtotal - discount/);
+	assert.match(prompt, /Add a discount helper/);
+	assert.match(prompt, /the change you just made/);
 	assert.match(prompt, /repository-relative path:line/);
 });
 

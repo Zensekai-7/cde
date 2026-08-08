@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { voiceFileLabel } from './navigationPresentation';
 import { rankFileCandidates, rankSymbolCandidates, symbolSearchQueries } from './navigationRanking';
 
 const DOCUMENT_SYMBOL_RETRY_DELAY_MS = 250;
@@ -143,7 +144,7 @@ export class NavigationController {
 				line: 1,
 				placement,
 				group_count: vscode.window.tabGroups.all.length,
-				spoken_response: `Opened ${candidate.path}${placementPhrase(placement)}.`,
+				spoken_response: `Opened ${voiceFileLabel(candidate.path)}${placementPhrase(placement)}.`,
 			};
 		} catch (error) {
 			return this.failure(`I could not find a file matching ${query}.`, error);
@@ -174,7 +175,7 @@ export class NavigationController {
 				line: targetLine + 1,
 				placement,
 				group_count: vscode.window.tabGroups.all.length,
-				spoken_response: `Opened ${candidate.path}${placementPhrase(placement)}.`,
+				spoken_response: `Opened ${voiceFileLabel(candidate.path)}${placementPhrase(placement)}.`,
 			};
 		} catch (error) {
 			return this.failure('I made the change, but could not open the edited file.', error);

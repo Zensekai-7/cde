@@ -130,7 +130,7 @@
 		activeRouteRequestId = requestId;
 		setState('thinking', 'Choosing an action…');
 		assistantText.textContent = 'Choosing the right IDE action…';
-		log('haiku.route.request');
+		log('router.route.request');
 		vscode.postMessage({
 			type: 'routeTool',
 			requestId,
@@ -321,7 +321,7 @@
 		}
 	}
 
-	function dispatchTool(callId, name, args, sessionEpoch) {
+	function dispatchTool(callId, name, args, sessionEpoch, conversationTurnId) {
 		if (activeSessionEpoch !== sessionEpoch || !callId || handledCalls.has(callId)) {
 			return;
 		}
@@ -331,7 +331,7 @@
 		const isCodeQuestion = name === 'ask_codebase';
 		const isCodeGeneration = name === 'implement_change';
 		if (isCodeGeneration) {
-			codeGenerationStreams.set(callId, { activity: 'Starting the code-writing agent…', text: '' });
+			codeGenerationStreams.set(callId, { activity: 'Starting the code-writing agent…', text: '', patches: new Map() });
 		}
 		setState('acting', isCodeQuestion ? 'Inspecting the codebase…' : isCodeGeneration ? 'Implementing…' : 'Using the IDE…');
 		assistantText.textContent = isCodeQuestion ? 'Reading the relevant code…' : isCodeGeneration ? 'Making the requested change…' : 'Working in the editor…';
@@ -341,6 +341,7 @@
 			requestId,
 			sessionEpoch,
 			callId,
+			conversationTurnId,
 			name,
 			arguments: args || '{}',
 		});
@@ -348,33 +349,33 @@
 
 	function handleToolRoute(message) {
 		if (message.sessionEpoch !== activeSessionEpoch || message.requestId !== activeRouteRequestId) {
-			log('haiku.route.stale');
+			log('router.route.stale');
 			return;
 		}
 		activeRouteRequestId = undefined;
-		log('haiku.route.selected', message.name);
-		dispatchTool(nextId('haiku-call'), message.name, message.arguments, message.sessionEpoch);
+		log('router.route.selected', message.name);
+		dispatchTool(nextId('haiku-call'), message.name, message.arguments, message.sessionEpoch, message.conversationTurnId);
 	}
 
 	function handleRouteResponse(message) {
 		if (message.sessionEpoch !== activeSessionEpoch || message.requestId !== activeRouteRequestId) {
-			log('haiku.response.stale');
+			log('router.response.stale');
 			return;
 		}
 		activeRouteRequestId = undefined;
-		log('haiku.response');
+		log('router.response');
 		speakExact(message.spokenResponse);
 	}
 
 	function handleRouteError(message) {
 		if (message.sessionEpoch !== activeSessionEpoch || message.requestId !== activeRouteRequestId) {
-			log('haiku.error.stale');
+			log('router.error.stale');
 			return;
 		}
 		activeRouteRequestId = undefined;
 		assistantText.textContent = message.message;
 		setState('error', 'Action selection failed');
-		log('haiku.route.error', message.message);
+		log('router.route.error', message.message);
 	}
 
 	function handleToolResult(message) {
@@ -383,11 +384,13 @@
 			return;
 		}
 		pendingTools.delete(message.callId);
+		const codeStream = codeGenerationStreams.get(message.callId);
 		codeGenerationStreams.delete(message.callId);
 		awaitingToolFollowup = true;
 		log('tool.result', JSON.stringify(message.result));
 		pinnedToolAnswer = Boolean(message.result.display_response);
-		assistantText.textContent = message.result.spoken_response;
+		const patches = codeStream ? [...codeStream.patches.values()].map(formatCodePatch) : [];
+		assistantText.textContent = [message.result.spoken_response, ...patches].filter(Boolean).join('\n\n');
 		speakExact(message.result.spoken_response);
 	}
 
@@ -396,7 +399,7 @@
 			log('code-generation.progress.stale', message.callId || 'unknown call');
 			return;
 		}
-		if ((message.kind !== 'text' && message.kind !== 'tool') || typeof message.text !== 'string' || !message.text) {
+		if ((message.kind !== 'text' && message.kind !== 'tool' && message.kind !== 'code') || typeof message.text !== 'string' || (message.kind !== 'code' && !message.text)) {
 			return;
 		}
 
@@ -406,12 +409,38 @@
 		}
 		if (message.kind === 'text') {
 			stream.text = `${stream.text}${message.text}`.slice(-4_000);
-		} else {
+		} else if (message.kind === 'tool') {
 			stream.activity = message.text;
 			log('code-generation.progress', message.text);
+		} else {
+			const patchId = Number.isInteger(message.toolIndex) ? message.toolIndex : stream.patches.size;
+			let patch = stream.patches.get(patchId);
+			if (!patch) {
+				patch = {
+					file: message.file || 'workspace file',
+					previousText: message.previousText,
+					text: '',
+				};
+				stream.patches.set(patchId, patch);
+			}
+			patch.text += message.text;
 		}
-		const output = [stream.activity, stream.text ? `${stream.text}▍` : ''].filter(Boolean).join('\n\n');
+		const patches = [...stream.patches.values()].map(formatCodePatch);
+		const output = [stream.activity, stream.text ? `${stream.text}▍` : '', ...patches].filter(Boolean).join('\n\n');
 		assistantText.textContent = output;
+	}
+
+	function formatCodePatch(patch) {
+		const header = patch.previousText === undefined ? `Writing ${patch.file}` : `Editing ${patch.file}`;
+		const next = prefixLines('+ ', patch.text || '');
+		if (patch.previousText === undefined) {
+			return `${header}\n\n${next}`;
+		}
+		return `${header}\n\n${prefixLines('- ', patch.previousText)}\n${next}`;
+	}
+
+	function prefixLines(prefix, text) {
+		return text.split('\n').map(line => `${prefix}${line}`).join('\n');
 	}
 
 	window.addEventListener('message', event => {

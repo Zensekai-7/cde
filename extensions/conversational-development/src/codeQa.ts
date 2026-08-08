@@ -7,6 +7,7 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import * as vscode from 'vscode';
 import { getAnthropicApiKey } from './apiKeys';
+import { ConversationContext } from './conversationContext';
 import { buildCodeQaPrompt, CODE_QA_OUTPUT_SCHEMA, CodeQaAnswer, CodeQaContext, parseCodeQaAnswer } from './codeQaProtocol';
 
 const CODE_QA_TIMEOUT_MS = 60_000;
@@ -72,7 +73,7 @@ const nativeImport = new Function('specifier', 'return import(specifier);') as N
 export class CodeQaController {
 	constructor(private readonly trace: (message: string) => void) { }
 
-	async ask(question: string): Promise<CodeQaToolResult> {
+	async ask(question: string, conversation?: ConversationContext): Promise<CodeQaToolResult> {
 		const apiKey = getAnthropicApiKey();
 		if (!apiKey) {
 			return failure('Claude is not configured in this CDE launch.', 'Set cde.anthropicApiKey or ANTHROPIC_API_KEY.');
@@ -83,7 +84,7 @@ export class CodeQaController {
 			return failure('Open a workspace before asking a code question.', 'No workspace folder is open.');
 		}
 
-		const context = captureEditorContext(workspaceRoot, question);
+		const context = captureEditorContext(workspaceRoot, question, conversation);
 		const abortController = new AbortController();
 		const timeout = setTimeout(() => abortController.abort(), CODE_QA_TIMEOUT_MS);
 		this.trace(`code-qa.start workspace=${workspaceRoot.fsPath} active=${context.activeFile ?? 'none'}`);
@@ -158,7 +159,7 @@ function createQueryOptions(workspaceRoot: string, abortController: AbortControl
 	};
 }
 
-function captureEditorContext(workspaceRoot: vscode.Uri, question: string): CodeQaContext {
+function captureEditorContext(workspaceRoot: vscode.Uri, question: string, conversation: ConversationContext | undefined): CodeQaContext {
 	const activeEditor = vscode.window.activeTextEditor;
 	const activeFile = activeEditor && activeEditor.document.uri.scheme === 'file'
 		? relativePath(workspaceRoot.fsPath, activeEditor.document.uri.fsPath)
@@ -177,6 +178,7 @@ function captureEditorContext(workspaceRoot: vscode.Uri, question: string): Code
 		activeLine: activeEditor ? activeEditor.selection.active.line + 1 : undefined,
 		selection,
 		visibleFiles,
+		conversation,
 	};
 }
 
