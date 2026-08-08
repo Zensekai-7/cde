@@ -173,10 +173,10 @@ const TOOLS: readonly AnthropicTool[] = [
 	},
 	{
 		name: 'control_background_job',
-		description: 'List, inspect, show a diff for, explicitly apply, cancel, or discard an existing background coding job. Never apply a completed job unless the user directly asks to apply it.',
+		description: 'Handle natural follow-ups about delegated coding work: list jobs; inspect progress or results; show a diff; explicitly bring completed work into the workspace; stop running work; or discard a result. Never apply a completed job unless the user directly asks to bring or apply it.',
 		input_schema: objectSchema({
 			action: enumProperty(BACKGROUND_JOB_ACTIONS, 'The background-job lifecycle action.'),
-			job: stringProperty('Optional job id or semantic label. Omit to target the most recent job.'),
+			job: stringProperty('An explicit job label or natural reference such as "the other one", "the latest", or "the finished one". Omit for pronouns such as "it" or "that change" so CDE can use the last discussed job.'),
 			file: stringProperty('Optional changed filename for show_diff.'),
 		}, ['action']),
 		strict: true,

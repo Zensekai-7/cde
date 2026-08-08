@@ -40,6 +40,8 @@ interface ToolOutcome {
 	readonly file?: string;
 	readonly primary_file?: string;
 	readonly changed_files?: readonly string[];
+	readonly job?: { readonly changed_files?: readonly string[] };
+	readonly jobs?: readonly { readonly changed_files?: readonly string[] }[];
 }
 
 /**
@@ -83,6 +85,8 @@ export class ConversationContextStore {
 			outcome.file,
 			outcome.primary_file,
 			...(outcome.changed_files ?? []),
+			...(outcome.job?.changed_files ?? []),
+			...(outcome.jobs?.flatMap(job => job.changed_files ?? []) ?? []),
 		]);
 		turn.relatedFiles = files;
 		this.relatedFiles = mergeFiles(files, this.relatedFiles);
