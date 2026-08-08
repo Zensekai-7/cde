@@ -47,6 +47,8 @@ const SEARCH_FILLER_WORDS = new Set([
 
 const MIN_FILE_SCORE = 350;
 const MIN_SYMBOL_SCORE = 400;
+const MIN_FUZZY_FILENAME_LENGTH = 5;
+const MIN_FUZZY_FILENAME_SIMILARITY = 0.82;
 
 function words(value: string): string[] {
 	return value
@@ -81,6 +83,37 @@ function stem(path: string): string {
 	return extensionStart > 0 ? name.slice(0, extensionStart) : name;
 }
 
+function editDistance(left: string, right: string): number {
+	if (left === right) {
+		return 0;
+	}
+	if (!left) {
+		return right.length;
+	}
+	if (!right) {
+		return left.length;
+	}
+
+	let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+	for (let leftIndex = 1; leftIndex <= left.length; leftIndex++) {
+		const current = [leftIndex];
+		for (let rightIndex = 1; rightIndex <= right.length; rightIndex++) {
+			current[rightIndex] = Math.min(
+				previous[rightIndex] + 1,
+				current[rightIndex - 1] + 1,
+				previous[rightIndex - 1] + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+			);
+		}
+		previous = current;
+	}
+	return previous[right.length];
+}
+
+function filenameSimilarity(left: string, right: string): number {
+	const longestLength = Math.max(left.length, right.length);
+	return longestLength === 0 ? 0 : 1 - editDistance(left, right) / longestLength;
+}
+
 function matchedWordCount(candidate: string, query: readonly string[]): number {
 	const candidateWords = new Set(words(candidate));
 	const candidateCompact = compact(candidate);
@@ -100,6 +133,7 @@ function scoreFilePath(path: string, query: string): number {
 	const nameCompact = compact(name);
 	const fileStem = stem(name);
 	const stemCompact = compact(fileStem);
+	const queryStemCompact = compact(stem(query.trim().replace(/^[`'\"]|[`'\"]$/g, '')));
 	let score = 0;
 
 	if (pathCompact === queryCompact) {
@@ -116,6 +150,12 @@ function scoreFilePath(path: string, query: string): number {
 	}
 	if (stemCompact.includes(queryCompact) || queryCompact.includes(stemCompact)) {
 		score += 400;
+	}
+	if (queryStemCompact.length >= MIN_FUZZY_FILENAME_LENGTH && stemCompact.length >= MIN_FUZZY_FILENAME_LENGTH) {
+		const similarity = filenameSimilarity(queryStemCompact, stemCompact);
+		if (similarity >= MIN_FUZZY_FILENAME_SIMILARITY) {
+			score += Math.round(similarity * 900);
+		}
 	}
 
 	const pathMatches = matchedWordCount(normalizedPath, relevantQueryWords);

@@ -3,12 +3,15 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { ConversationContext, formatConversationContext } from './conversationContext';
+
 export interface CodeGenerationContext {
 	readonly request: string;
 	readonly activeFile?: string;
 	readonly activeLine?: number;
 	readonly selection?: string;
 	readonly visibleFiles: readonly string[];
+	readonly conversation?: ConversationContext;
 }
 
 export interface CodeGenerationAnswer {
@@ -20,13 +23,17 @@ export interface CodeGenerationAnswer {
 }
 
 export interface CodeGenerationProgress {
-	readonly kind: 'text' | 'tool';
+	readonly kind: 'text' | 'tool' | 'code';
 	readonly text: string;
+	readonly file?: string;
+	readonly previousText?: string;
+	readonly toolIndex?: number;
 }
 
 interface StreamingToolCall {
 	readonly name: string;
 	input: string;
+	streamedCode?: string;
 }
 
 const MAX_SELECTION_CHARS = 6_000;
@@ -84,10 +91,12 @@ export class CodeGenerationStreamDecoder {
 
 		const index = eventIndex(event);
 		const tool = index === undefined ? undefined : this.streamingTools.get(index);
-		if (tool) {
-			tool.input += delta.partial_json;
+		if (!tool || index === undefined) {
+			return [];
 		}
-		return [];
+
+		tool.input += delta.partial_json;
+		return this.streamCode(tool, index);
 	}
 
 	private finishTool(event: Record<string, unknown>): readonly CodeGenerationProgress[] {
@@ -102,6 +111,37 @@ export class CodeGenerationStreamDecoder {
 
 		this.streamingTools.delete(index);
 		return [{ kind: 'tool', text: describeToolActivity(tool.name, tool.input) }];
+	}
+
+	private streamCode(tool: StreamingToolCall, toolIndex: number): readonly CodeGenerationProgress[] {
+		const code = streamingCode(tool.name, tool.input);
+		if (!code || code.text === undefined) {
+			return [];
+		}
+
+		const previous = tool.streamedCode;
+		tool.streamedCode = code.text;
+		if (previous === undefined) {
+			if (!code.text) {
+				return [];
+			}
+			return [{
+				kind: 'code',
+				text: code.text,
+				file: code.file,
+				previousText: code.previousText,
+				toolIndex,
+			}];
+		}
+		if (!code.text.startsWith(previous) || code.text.length === previous.length) {
+			return [];
+		}
+		return [{
+			kind: 'code',
+			text: code.text.slice(previous.length),
+			file: code.file,
+			toolIndex,
+		}];
 	}
 }
 
@@ -142,10 +182,14 @@ export function buildCodeGenerationPrompt(context: CodeGenerationContext): strin
 	const selection = context.selection
 		? truncate(context.selection, MAX_SELECTION_CHARS)
 		: 'none';
+	const conversation = formatConversationContext(context.conversation);
 
 	return `Implement the requested repository change directly in the workspace.
 
 Request: ${context.request}
+
+Recent CDE conversation:
+${conversation}
 
 Live editor context:
 - Active location: ${activeLocation}
@@ -153,7 +197,7 @@ Live editor context:
 - Selected code:
 ${selection}
 
-Inspect the relevant code before editing. Make the smallest complete change that satisfies the request and preserve surrounding conventions. Use only the available read, search, edit, and write tools; do not run shell commands, browse the web, use MCP, modify files outside the workspace, or make unrelated changes. Treat the selection as the target when the request says "this", "it", or "here".
+Inspect the relevant code before editing. Use the conversation to resolve follow-ups such as "that", "this", "another one", and "the function you just added". The current request and live editor context take precedence when they conflict. Make the smallest complete change that satisfies the request and preserve surrounding conventions. Use only the available read, search, edit, and write tools; do not run shell commands, browse the web, use MCP, modify files outside the workspace, or make unrelated changes. Treat the selection as the target when the request says "this", "it", or "here".
 
 When finished, return every changed workspace-relative file in changed_files. Set primary_file to the most useful changed file for the editor to open, and primary_line to a changed one-based line. spoken_response must state only the completed result in the fewest words necessary. If the request cannot be implemented safely from the repository, make no edits and explain why.`;
 }
@@ -295,4 +339,90 @@ function toolFile(serializedInput: string): string | undefined {
 		// Tool input may be incomplete when the stream is interrupted.
 	}
 	return undefined;
+}
+
+function streamingCode(name: string, serializedInput: string): { readonly text?: string; readonly file?: string; readonly previousText?: string } | undefined {
+	if (name === 'Edit') {
+		return {
+			text: partialJsonString(serializedInput, 'new_string'),
+			file: partialToolFile(serializedInput),
+			previousText: partialJsonString(serializedInput, 'old_string'),
+		};
+	}
+	if (name === 'Write') {
+		return {
+			text: partialJsonString(serializedInput, 'content'),
+			file: partialToolFile(serializedInput),
+		};
+	}
+	return undefined;
+}
+
+function partialToolFile(serializedInput: string): string | undefined {
+	for (const key of ['file_path', 'path', 'file']) {
+		const file = partialJsonString(serializedInput, key);
+		if (file) {
+			return file;
+		}
+	}
+	return undefined;
+}
+
+function partialJsonString(serializedInput: string, key: string): string | undefined {
+	const property = new RegExp(`"${key}"\\s*:\\s*"`).exec(serializedInput);
+	if (!property) {
+		return undefined;
+	}
+
+	let result = '';
+	for (let index = property.index + property[0].length; index < serializedInput.length; index++) {
+		const character = serializedInput[index];
+		if (character === '"') {
+			return result;
+		}
+		if (character !== '\\') {
+			result += character;
+			continue;
+		}
+
+		const escape = serializedInput[index + 1];
+		if (!escape) {
+			return result;
+		}
+		index++;
+		switch (escape) {
+			case '"':
+			case '\\':
+			case '/':
+				result += escape;
+				break;
+			case 'b':
+				result += '\b';
+				break;
+			case 'f':
+				result += '\f';
+				break;
+			case 'n':
+				result += '\n';
+				break;
+			case 'r':
+				result += '\r';
+				break;
+			case 't':
+				result += '\t';
+				break;
+			case 'u': {
+				const codePoint = serializedInput.slice(index + 1, index + 5);
+				if (!/^[\da-f]{4}$/i.test(codePoint)) {
+					return result;
+				}
+				result += String.fromCharCode(Number.parseInt(codePoint, 16));
+				index += 4;
+				break;
+			}
+			default:
+				return result;
+		}
+	}
+	return result;
 }

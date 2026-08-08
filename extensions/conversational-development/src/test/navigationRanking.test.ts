@@ -5,6 +5,7 @@
 
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { voiceFileLabel } from '../navigationPresentation';
 import { rankFileCandidates, rankSymbolCandidates, symbolSearchQueries } from '../navigationRanking';
 
 const files = [
@@ -21,6 +22,12 @@ test('ranks exact paths, filenames, and spoken file names', () => {
 	assert.equal(rankFileCandidates(files, 'open the checkout service')?.path, 'src/checkout.ts');
 	assert.equal(rankFileCandidates(files, 'the cart summary')?.path, 'src/cart/cart-summary.ts');
 	assert.equal(rankFileCandidates(files, 'order draft')?.path, 'src/orders/order-draft.ts');
+	assert.equal(rankFileCandidates(files, 'discountspreview.js')?.path, 'src/promotions/discount-preview.ts');
+});
+
+test('uses a concise filename rather than a workspace path for voice responses', () => {
+	assert.equal(voiceFileLabel('src/cart/cart-summary.ts'), 'cart summary');
+	assert.equal(voiceFileLabel('src/checkout/CalculateFinalPrice.ts'), 'Calculate Final Price');
 });
 
 test('uses stable lexical ordering for equally ranked files', () => {
