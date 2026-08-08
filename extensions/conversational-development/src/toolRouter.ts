@@ -17,7 +17,7 @@ import { ROUTING_INSTRUCTIONS } from './toolRoutingInstructions';
 import { parseHaikuToolRoute, ToolRoutingResult, WALKTHROUGH_CONTROL_ACTIONS } from './toolRoutingProtocol';
 
 const TOOL_ROUTING_TIMEOUT_MS = 15_000;
-const ROUTER_MODEL = 'claude-sonnet-4-5';
+const ROUTER_MODEL = 'claude-haiku-4-5-20251001';
 
 export interface ToolRoutingContext {
 	readonly activeFile?: string;
