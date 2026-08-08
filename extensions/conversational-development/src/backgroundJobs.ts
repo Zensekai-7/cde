@@ -111,7 +111,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 				conversation,
 				storageUri: vscode.Uri.joinPath(this.storageRoot, 'background-jobs', id),
 				status: 'queued',
-				progress: 'Waiting to start…',
+				progress: 'Waiting for a free worker…',
 				changedFiles: [],
 				cancelRequested: false,
 				discardRequested: false,
@@ -124,10 +124,10 @@ export class BackgroundJobManager implements vscode.Disposable {
 				ok: true,
 				job: this.view(job),
 				spoken_response: `Got it. I'll handle ${spokenBackgroundJobLabel(label)} in the background.`,
-				display_response: `${label} is queued as ${id}. You can continue working while it runs.`,
+				display_response: `I'm working on ${spokenBackgroundJobLabel(label)} separately. You can keep going here.`,
 			};
 		} catch (error) {
-			return failure('I could not start that background job.', error);
+			return failure("I couldn't start that in the background.", error);
 		}
 	}
 
@@ -152,7 +152,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 			}
 		} catch (error) {
 			return failure(
-				error instanceof BackgroundJobInteractionError ? error.message : 'I could not complete that background job action.',
+				error instanceof BackgroundJobInteractionError ? error.message : 'I hit a problem while handling that background change.',
 				error,
 			);
 		}
@@ -175,7 +175,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 			}
 			this.activeJobs += 1;
 			next.status = 'preparing';
-			next.progress = 'Creating an isolated worktree…';
+			next.progress = 'Getting a clean workspace ready…';
 			this.emit(next);
 			void this.run(next).finally(() => {
 				this.activeJobs -= 1;
@@ -198,7 +198,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 			}
 
 			job.status = 'running';
-			job.progress = 'Inspecting the isolated workspace…';
+			job.progress = 'Looking through the code…';
 			job.abortController = new AbortController();
 			this.emit(job);
 			const jobWorkspacePath = job.workspaceRelativePath
@@ -272,7 +272,7 @@ export class BackgroundJobManager implements vscode.Disposable {
 			spoken_response: summarizeBackgroundJobs(jobs),
 			display_response: jobs.length === 0
 				? 'No background jobs.'
-				: jobs.map(job => `${job.label} (${job.id}): ${job.status}`).join('\n'),
+				: jobs.map(job => `${spokenBackgroundJobLabel(job.label)}: ${job.status}`).join('\n'),
 		};
 	}
 

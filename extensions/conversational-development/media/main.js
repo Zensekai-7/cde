@@ -126,11 +126,11 @@
 			const header = document.createElement('div');
 			header.className = 'background-job-header';
 			const label = document.createElement('strong');
-			label.textContent = job.label;
+			label.textContent = humanizeJobLabel(job.label);
 			label.title = job.request;
 			const status = document.createElement('span');
 			status.className = `background-job-status ${job.status}`;
-			status.textContent = job.status;
+			status.textContent = humanizeJobStatus(job.status);
 			header.append(label, status);
 
 			const progress = document.createElement('p');
@@ -146,6 +146,24 @@
 			return item;
 		});
 		backgroundJobList.replaceChildren(...items);
+	}
+
+	function humanizeJobLabel(label) {
+		return String(label || '').replace(/[-_]+/g, ' ');
+	}
+
+	function humanizeJobStatus(status) {
+		switch (status) {
+			case 'queued': return 'Waiting';
+			case 'preparing':
+			case 'running': return 'Working';
+			case 'completed': return 'Ready';
+			case 'failed': return 'Needs attention';
+			case 'cancelled': return 'Stopped';
+			case 'applied': return 'Applied';
+			case 'discarded': return 'Discarded';
+			default: return status;
+		}
 	}
 
 	function updateBackgroundJob(job) {
